@@ -22,9 +22,9 @@ const VIEW_META = {
     mode: "Live Supply"
   },
   forecast: {
-    title: "Live Supply Snapshot",
-    subtitle: "Current available taxi count and strongest live supply clusters.",
-    mode: "Snapshot"
+    title: "Pickup Readiness",
+    subtitle: "Use your current location to decide whether to book here, walk, or use an official taxi stand.",
+    mode: "Pickup Readiness"
   },
   nearby: {
     title: "Nearby Mobility",
@@ -119,7 +119,11 @@ function clearMapLayers() {
     "incident-points",
     "incident-labels",
     "speed-lines",
-    "slow-speed-lines"
+    "slow-speed-lines",
+    "readiness-ring-fills",
+    "readiness-ring-lines",
+    "readiness-ring-labels",
+    "readiness-guidance-line"
   ];
 
   const sources = [
@@ -129,7 +133,9 @@ function clearMapLayers() {
     "bus-stops-source",
     "taxi-stands-source",
     "incidents-source",
-    "speed-source"
+    "speed-source",
+    "readiness-rings-source",
+    "readiness-line-source"
   ];
 
   layers.forEach(layer => {
@@ -148,7 +154,7 @@ function clearMapLayers() {
 async function renderView(viewName) {
   try {
     if (viewName === "heatmap") await renderHeatmap();
-    if (viewName === "forecast") await renderSupplySnapshot();
+    if (viewName === "forecast") await renderPickupReadiness();
     if (viewName === "nearby") await renderNearby();
     if (viewName === "surge") await renderFarePressure();
     if (viewName === "pickup") await renderTaxiStands();
@@ -180,24 +186,65 @@ async function renderHeatmap() {
   `);
 }
 
-async function renderSupplySnapshot() {
-  const summary = await fetchJson("/supply-summary");
-  const zones = await fetchJson("/zones?limit=80");
-  const clusters = zones.data || [];
+async function renderPickupReadiness() {
+  if (!userLocation) {
+    const mobility = await fetchJson("/mobility");
+    addTaxiPoints(mobility.taxis || [], false);
+    addTaxiStandPoints(mobility.taxi_stands || []);
 
-  addTaxiHexSource(clusters);
-  addTaxiHexagons();
+    updateSheet(`
+      ${summaryCard("Pickup Readiness", [
+        ["Status", "Tap My Location"],
+        ["Why location is needed", "readiness is calculated around your blue dot"],
+        ["Available taxis shown", mobility.counts.available_taxis],
+        ["Unavailable/busy taxi data", "not provided by LTA"]
+      ])}
+      ${noteCard("Tap ◎ My Location at the top. This view then shows 300m, 600m and 1km readiness circles around you, nearby available taxis, official taxi stands, road friction, and a recommendation.")}
+      ${noteCard("LTA Taxi-Availability only shows taxis currently available for hire. It does not expose hired, busy, booked, Grab-only, or unavailable taxi counts, so this app will not invent those values.")}
+    `);
+    return;
+  }
+
+  const readiness = await fetchJson(`/pickup-readiness?lat=${userLocation.lat}&lng=${userLocation.lng}`);
+  const taxis = readiness.nearest_taxis || [];
+  const stands = readiness.nearby_taxi_stands || [];
+  const incidents = readiness.nearby_traffic_incidents || [];
+  const slowSegments = readiness.nearby_slow_speed_segments || [];
+
+  addReadinessRings(userLocation.lat, userLocation.lng);
+  addTaxiPoints(taxis, true);
+  addTaxiStandPoints(stands, true);
+  addIncidentPoints(incidents);
+  addSpeedLines(slowSegments, true);
+
+  if (readiness.nearest_taxi_stand) {
+    addReadinessLine(userLocation, readiness.nearest_taxi_stand, "Nearest taxi stand");
+  } else if (readiness.nearest_supply_cluster) {
+    addReadinessLine(userLocation, readiness.nearest_supply_cluster, "Nearest supply cluster");
+  }
+
+  map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: Math.max(map.getZoom(), 14), speed: 0.7 });
 
   updateSheet(`
-    ${summaryCard("Live Supply Snapshot", [
-      ["Available taxis", summary.available_taxis],
-      ["Visible hexagons", summary.visible_clusters],
-      ["Count meaning", "available-for-hire taxis per approximate hex cell"],
-      ["Source", "LTA Taxi-Availability"],
-      ["Updated", formatTime(summary.updated_at_utc)]
+    ${summaryCard("Pickup Readiness", [
+      ["Readiness", readiness.readiness_level],
+      ["Available taxis within 300m", readiness.available_taxi_counts.within_300m],
+      ["Available taxis within 600m", readiness.available_taxi_counts.within_600m],
+      ["Available taxis within 1km", readiness.available_taxi_counts.within_1000m],
+      ["Nearest taxi stand", readiness.nearest_taxi_stand ? `${readiness.nearest_taxi_stand.distance_m}m` : "N/A"],
+      ["Road incidents within 1.5km", readiness.counts.traffic_incidents_1500m],
+      ["Slow road segments within 1.5km", readiness.counts.slow_segments_1500m],
+      ["Unavailable/busy taxis", "not available in LTA feed"]
     ])}
-    ${listCard("Strongest supply hexagons", (summary.top_clusters || []).map(cluster => `${cluster.name}: ${cluster.available_taxis} available taxis`))}
-    ${noteCard("This replaces the earlier forecast view. Forecasting demand would require Grab booking data, which is not public. The hexagon count helps users identify where live taxi supply is concentrated, but it does not predict fare or wait time by itself.")}
+    ${listCard("Recommendation", [readiness.recommendation])}
+    ${legendCard([
+      ["Blue dot", "your current location"],
+      ["Blue circles", "300m / 600m / 1km readiness radius"],
+      ["Green dots", "available-for-hire taxis only"],
+      ["Yellow T", "official taxi stands/stops"],
+      ["Red circles/lines", "road friction signals"]
+    ])}
+    ${noteCard(readiness.unavailable_taxis.message)}
   `);
 }
 
@@ -322,6 +369,135 @@ async function renderDisruption() {
       ["Yellow T", "Taxi stands overlay"]
     ])}
   `);
+}
+
+
+function addReadinessRings(lat, lng) {
+  const rings = [
+    { radius_m: 300, label: "300m", level: 1 },
+    { radius_m: 600, label: "600m", level: 2 },
+    { radius_m: 1000, label: "1km", level: 3 }
+  ];
+
+  map.addSource("readiness-rings-source", {
+    type: "geojson",
+    data: {
+      type: "FeatureCollection",
+      features: rings.flatMap(ring => [
+        circlePolygonFeature(lng, lat, ring.radius_m / 1000, {
+          label: ring.label,
+          radius_m: ring.radius_m,
+          level: ring.level,
+          kind: "ring"
+        }),
+        pointFeature(lng + metersToLng(ring.radius_m, lat), lat, {
+          label: ring.label,
+          level: ring.level,
+          kind: "label"
+        })
+      ])
+    }
+  });
+
+  map.addLayer({
+    id: "readiness-ring-fills",
+    type: "fill",
+    source: "readiness-rings-source",
+    filter: ["==", ["get", "kind"], "ring"],
+    paint: {
+      "fill-color": "#2563eb",
+      "fill-opacity": ["interpolate", ["linear"], ["get", "level"], 1, 0.10, 3, 0.035]
+    }
+  });
+
+  map.addLayer({
+    id: "readiness-ring-lines",
+    type: "line",
+    source: "readiness-rings-source",
+    filter: ["==", ["get", "kind"], "ring"],
+    paint: {
+      "line-color": "#93c5fd",
+      "line-width": 1.6,
+      "line-opacity": 0.82,
+      "line-dasharray": [2, 2]
+    }
+  });
+
+  map.addLayer({
+    id: "readiness-ring-labels",
+    type: "symbol",
+    source: "readiness-rings-source",
+    filter: ["==", ["get", "kind"], "label"],
+    layout: {
+      "text-field": ["get", "label"],
+      "text-size": 11,
+      "text-allow-overlap": true
+    },
+    paint: {
+      "text-color": "#ffffff",
+      "text-halo-color": "#1e3a8a",
+      "text-halo-width": 1.6
+    }
+  });
+}
+
+function addReadinessLine(from, to, label) {
+  if (!from || !to || to.lat === undefined || to.lng === undefined) return;
+
+  map.addSource("readiness-line-source", {
+    type: "geojson",
+    data: {
+      type: "FeatureCollection",
+      features: [{
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [[from.lng, from.lat], [to.lng, to.lat]]
+        },
+        properties: { label }
+      }]
+    }
+  });
+
+  map.addLayer({
+    id: "readiness-guidance-line",
+    type: "line",
+    source: "readiness-line-source",
+    paint: {
+      "line-color": "#facc15",
+      "line-width": 3,
+      "line-opacity": 0.82,
+      "line-dasharray": [1.2, 1.2]
+    }
+  });
+}
+
+function circlePolygonFeature(lng, lat, radiusKm, props) {
+  const coordinates = [];
+  const steps = 72;
+  const latRadius = radiusKm / 111.32;
+  const lngRadius = radiusKm / (111.32 * Math.cos(lat * Math.PI / 180));
+
+  for (let i = 0; i <= steps; i++) {
+    const angle = (Math.PI * 2 * i) / steps;
+    coordinates.push([
+      lng + lngRadius * Math.cos(angle),
+      lat + latRadius * Math.sin(angle)
+    ]);
+  }
+
+  return {
+    type: "Feature",
+    geometry: {
+      type: "Polygon",
+      coordinates: [coordinates]
+    },
+    properties: props
+  };
+}
+
+function metersToLng(meters, lat) {
+  return (meters / 1000) / (111.32 * Math.cos(lat * Math.PI / 180));
 }
 
 function addTaxiHexSource(clusters) {
@@ -637,9 +813,9 @@ function locateUser() {
       map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), speed: 0.8 });
       addLog(`Current location set: ${lat.toFixed(5)}, ${lng.toFixed(5)} · accuracy ${accuracy}m`, "success");
 
-      if (currentView === "nearby") {
+      if (currentView === "nearby" || currentView === "forecast") {
         clearMapLayers();
-        renderNearby();
+        renderView(currentView).then(drawUserLocation);
       }
     },
     error => {
