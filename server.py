@@ -21,6 +21,31 @@ app.add_middleware(
 LTA_BASE_URL = "https://datamall2.mytransport.sg/ltaodataservice"
 
 CACHE: Dict[str, Dict[str, Any]] = {}
+SERVER_LOGS: List[Dict[str, Any]] = []
+
+
+def add_server_log(event: str, details: Optional[Dict[str, Any]] = None) -> None:
+    SERVER_LOGS.append({
+        "time_utc": now_iso(),
+        "event": event,
+        "details": details or {},
+    })
+    del SERVER_LOGS[:-80]
+
+
+def safe_account_key_status() -> Dict[str, Any]:
+    raw = os.getenv("LTA_ACCOUNT_KEY", "")
+    stripped = raw.strip()
+    cleaned = stripped.strip('"')
+    return {
+        "configured": bool(cleaned),
+        "raw_length": len(raw),
+        "trimmed_length": len(stripped),
+        "cleaned_length": len(cleaned),
+        "has_leading_or_trailing_spaces": raw != stripped,
+        "has_outer_quotes": stripped.startswith(("\"", "'")) and stripped.endswith(("\"", "'")),
+        "value_is_hidden": True,
+    }
 
 
 def now_iso() -> str:
@@ -33,7 +58,9 @@ def get_env_flag(name: str) -> bool:
 
 
 def lta_headers() -> Dict[str, str]:
-    account_key = os.getenv("LTA_ACCOUNT_KEY")
+    # Strip spaces and accidental quotes from Render env var values.
+    # This fixes the common copy/paste issue: LTA_ACCOUNT_KEY="xxxxx".
+    account_key = os.getenv("LTA_ACCOUNT_KEY", "").strip().strip('"')
     if not account_key:
         raise HTTPException(
             status_code=500,
@@ -42,7 +69,8 @@ def lta_headers() -> Dict[str, str]:
 
     return {
         "AccountKey": account_key,
-        "accept": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "SingaporeGrabMobilityView/1.0",
     }
 
 
@@ -85,9 +113,11 @@ def lta_get(endpoint: str, params: Optional[Dict[str, Any]] = None, ttl_seconds:
 
     cached = cache_get(cache_key, ttl_seconds)
     if cached is not None:
+        add_server_log("LTA cache hit", {"endpoint": endpoint, "params": params, "records": len(cached)})
         return cached
 
     url = f"{LTA_BASE_URL}/{endpoint}"
+    add_server_log("LTA request started", {"endpoint": endpoint, "url": url, "params": params})
 
     try:
         response = requests.get(
@@ -97,22 +127,45 @@ def lta_get(endpoint: str, params: Optional[Dict[str, Any]] = None, ttl_seconds:
             timeout=20,
         )
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"LTA request failed: {exc}")
+        add_server_log("LTA request exception", {"endpoint": endpoint, "error": str(exc)})
+        raise HTTPException(status_code=502, detail=f"LTA request failed for {endpoint}: {exc}")
+
+    body_preview = response.text[:500] if response.text else "<empty body>"
+    response_details = {
+        "endpoint": endpoint,
+        "url": response.url,
+        "status_code": response.status_code,
+        "reason": response.reason,
+        "content_type": response.headers.get("content-type"),
+        "body_preview": body_preview,
+    }
 
     if response.status_code != 200:
+        add_server_log("LTA request failed", response_details)
         raise HTTPException(
-            status_code=response.status_code,
-            detail=f"LTA API error for {endpoint}: {response.text[:300]}",
+            status_code=502,
+            detail={
+                "message": f"LTA API error for {endpoint}",
+                **response_details,
+                "hint": "Check that LTA_ACCOUNT_KEY is correct, active, and pasted without quotes/spaces. If status is 401/403, the key is not being accepted by LTA DataMall or the source IP is blocked.",
+            },
         )
 
     try:
         payload = response.json()
     except ValueError:
-        raise HTTPException(status_code=502, detail=f"LTA returned non-JSON response for {endpoint}.")
+        add_server_log("LTA non-JSON response", response_details)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": f"LTA returned non-JSON response for {endpoint}",
+                **response_details,
+            },
+        )
 
     data = extract_lta_value(payload)
+    add_server_log("LTA request succeeded", {"endpoint": endpoint, "records": len(data), "status_code": response.status_code})
     return cache_set(cache_key, data)
-
 
 def lta_get_paged(endpoint: str, ttl_seconds: int = 3600, max_pages: int = 30) -> List[Dict[str, Any]]:
     cache_key = f"{endpoint}:paged:{max_pages}"
@@ -327,6 +380,7 @@ def health():
         "mock_data_used": False,
         "mapbox_token_configured": get_env_flag("MAPBOX_TOKEN"),
         "lta_account_key_configured": get_env_flag("LTA_ACCOUNT_KEY"),
+        "lta_account_key_diagnostics": safe_account_key_status(),
         "server_time_utc": now_iso(),
     }
 
@@ -336,6 +390,106 @@ def config():
     return JSONResponse({
         "mapbox_token": os.getenv("MAPBOX_TOKEN"),
     })
+
+
+@app.get("/debug/logs")
+def debug_logs():
+    return {
+        "status": "ok",
+        "server_time_utc": now_iso(),
+        "logs": SERVER_LOGS[-80:],
+    }
+
+
+@app.get("/debug/lta")
+def debug_lta(endpoint: str = Query(default="Taxi-Availability")):
+    allowed = {
+        "Taxi-Availability",
+        "BusStops",
+        "TaxiStands",
+        "TrafficIncidents",
+        "v4/TrafficSpeedBands",
+        "TrainServiceAlerts",
+    }
+
+    if endpoint not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Endpoint not allowed for debug. Use one of: {', '.join(sorted(allowed))}",
+        )
+
+    url = f"{LTA_BASE_URL}/{endpoint}"
+    started = time.time()
+
+    try:
+        response = requests.get(url, headers=lta_headers(), timeout=20)
+        elapsed_ms = int((time.time() - started) * 1000)
+        body_preview = response.text[:800] if response.text else "<empty body>"
+
+        diagnostic = {
+            "endpoint": endpoint,
+            "url": response.url,
+            "status_code": response.status_code,
+            "reason": response.reason,
+            "elapsed_ms": elapsed_ms,
+            "content_type": response.headers.get("content-type"),
+            "body_preview": body_preview,
+            "account_key_diagnostics": safe_account_key_status(),
+            "server_time_utc": now_iso(),
+        }
+        add_server_log("Manual LTA debug", diagnostic)
+        return diagnostic
+    except requests.RequestException as exc:
+        diagnostic = {
+            "endpoint": endpoint,
+            "url": url,
+            "error": str(exc),
+            "account_key_diagnostics": safe_account_key_status(),
+            "server_time_utc": now_iso(),
+        }
+        add_server_log("Manual LTA debug exception", diagnostic)
+        return diagnostic
+
+
+@app.get("/debug/lta-all")
+def debug_lta_all():
+    endpoints = [
+        "Taxi-Availability",
+        "BusStops",
+        "TaxiStands",
+        "TrafficIncidents",
+        "v4/TrafficSpeedBands",
+        "TrainServiceAlerts",
+    ]
+    results = []
+
+    for endpoint in endpoints:
+        url = f"{LTA_BASE_URL}/{endpoint}"
+        started = time.time()
+        try:
+            response = requests.get(url, headers=lta_headers(), timeout=20)
+            elapsed_ms = int((time.time() - started) * 1000)
+            results.append({
+                "endpoint": endpoint,
+                "status_code": response.status_code,
+                "reason": response.reason,
+                "elapsed_ms": elapsed_ms,
+                "content_type": response.headers.get("content-type"),
+                "body_preview": response.text[:300] if response.text else "<empty body>",
+            })
+        except requests.RequestException as exc:
+            results.append({
+                "endpoint": endpoint,
+                "error": str(exc),
+            })
+
+    diagnostic = {
+        "account_key_diagnostics": safe_account_key_status(),
+        "server_time_utc": now_iso(),
+        "results": results,
+    }
+    add_server_log("Manual LTA all-endpoints debug", diagnostic)
+    return diagnostic
 
 
 @app.get("/taxis")

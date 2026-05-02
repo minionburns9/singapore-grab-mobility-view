@@ -1,5 +1,17 @@
 let map;
 let currentView = null;
+const APP_LOGS = [];
+
+function addLog(message, level = "info", meta = null) {
+  APP_LOGS.push({
+    time: new Date().toLocaleTimeString(),
+    level,
+    message,
+    meta
+  });
+  while (APP_LOGS.length > 40) APP_LOGS.shift();
+}
+
 
 const VIEW_META = {
   heatmap: {
@@ -36,6 +48,7 @@ const VIEW_META = {
 
 async function openView(viewName) {
   currentView = viewName;
+  addLog(`Opening view: ${viewName}`, "info");
 
   document.getElementById("home").style.display = "none";
   document.getElementById("mapView").style.display = "block";
@@ -134,6 +147,7 @@ async function renderView(viewName) {
     if (viewName === "disruption") await renderDisruption();
   } catch (error) {
     console.error(error);
+    addLog(error.message || "Unable to load live data.", "error");
     updateSheet(errorCard(error.message || "Unable to load live data."));
   }
 }
@@ -530,25 +544,64 @@ function addSpeedLines(segments, slowOnly = false) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
+  addLog(`GET ${url}`, "request");
+
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (networkError) {
+    addLog(`Network error for ${url}: ${networkError.message}`, "error");
+    throw networkError;
+  }
 
   let payload;
   try {
     payload = await response.json();
   } catch (error) {
-    throw new Error(`Non-JSON response from ${url}`);
+    addLog(`Non-JSON response from ${url} · HTTP ${response.status}`, "error");
+    throw new Error(`Non-JSON response from ${url} · HTTP ${response.status}`);
   }
 
   if (!response.ok) {
     const detail = payload.detail || response.statusText || "Request failed";
-    throw new Error(`${url}: ${detail}`);
+    const detailText = typeof detail === "string" ? detail : JSON.stringify(detail);
+    addLog(`${url} failed · HTTP ${response.status} · ${detailText}`, "error");
+    throw new Error(`${url}: ${detailText}`);
   }
 
+  const count = payload.count ?? payload.available_taxis ?? payload.data?.length ?? payload.results?.length ?? "ok";
+  addLog(`${url} success · ${count}`, "success");
   return payload;
 }
 
 function updateSheet(html) {
-  document.getElementById("sheetContent").innerHTML = html;
+  document.getElementById("sheetContent").innerHTML = html + logBox();
+}
+
+function logBox() {
+  const rows = APP_LOGS.slice().reverse().map(log => {
+    const color = log.level === "error" ? "#fb7185" : log.level === "success" ? "#86efac" : log.level === "request" ? "#93c5fd" : "#cbd5e1";
+    return `
+      <div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;line-height:1.35;">
+        <span style="color:#94a3b8;">${escapeHtml(log.time)}</span>
+        <span style="color:${color};font-weight:700;"> ${escapeHtml(log.level.toUpperCase())}</span>
+        <div style="color:#e2e8f0;word-break:break-word;">${escapeHtml(log.message)}</div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="info-card" style="background:#0b1727;border:1px solid rgba(125,211,252,0.18);">
+      <h3>Live Debug Log</h3>
+      <div class="metric">
+        <span>Purpose</span>
+        <strong>Copy errors from here</strong>
+      </div>
+      <div style="max-height:180px;overflow:auto;">
+        ${rows || `<div style="font-size:12px;color:#94a3b8;">No frontend logs yet.</div>`}
+      </div>
+    </div>
+  `;
 }
 
 function loadingCard(text) {
