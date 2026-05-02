@@ -1185,17 +1185,10 @@ function stopChoiceRouteAnimation() {
 }
 
 function curvedRouteCoordinates(fromLng, fromLat, toLng, toLat, rank) {
-  const midLng = (fromLng + toLng) / 2;
-  const midLat = (fromLat + toLat) / 2;
-  const dx = toLng - fromLng;
-  const dy = toLat - fromLat;
-  const length = Math.sqrt(dx * dx + dy * dy) || 0.001;
-  const nx = -dy / length;
-  const ny = dx / length;
-  const offset = 0.01 * (rank === 2 ? -0.7 : rank === 3 ? 0.7 : 0.45);
+  // Straight-line guidance only. These are decision-flow indicators, not routed road paths.
+  // Keeping them straight avoids misleading loops or exaggerated detours on short local trips.
   return [
     [fromLng, fromLat],
-    [midLng + nx * offset, midLat + ny * offset],
     [toLng, toLat]
   ];
 }
