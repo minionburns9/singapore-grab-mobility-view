@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Singapore Grab Mobility View</title>
+  <title>Singapore Taxi & Mobility Decision View</title>
 
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css" rel="stylesheet" />
@@ -299,7 +299,7 @@
 <body>
   <main id="home">
     <section class="hero">
-      <h1>Singapore Grab Mobility View</h1>
+      <h1>Singapore Taxi & Mobility Decision View</h1>
       <p>Mobile-first live mobility intelligence using LTA taxi availability, bus stops, taxi stands, traffic incidents, speed bands and train-alert APIs.</p>
       <div class="status-pill">Live LTA DataMall data · No mock or simulated mobility data</div>
     </section>
@@ -315,22 +315,15 @@
       <button class="card" onclick="openView('forecast')">
         <div class="card-icon">📍</div>
         <h2>Pickup Readiness</h2>
-        <p>Use your blue-dot location to decide whether to book here or walk to a better pickup point.</p>
-        <span class="tag">Taxi decision view</span>
+        <p><strong>Should I book a taxi from exactly here?</strong></p>
+        <span class="tag">Includes fare pressure proxy</span>
       </button>
 
       <button class="card" onclick="openView('nearby')">
         <div class="card-icon">🧭</div>
         <h2>1km Mobility Choices</h2>
-        <p>One local view for taxis, bus stops, MRT, taxi stands, road friction and train alerts.</p>
-        <span class="tag">Wait, bus, or MRT</span>
-      </button>
-
-      <button class="card" onclick="openView('surge')">
-        <div class="card-icon">🚦</div>
-        <h2>Fare Pressure Proxy</h2>
-        <p>Uses live supply and traffic friction as a transparent proxy, not actual Grab pricing.</p>
-        <span class="tag">No fake surge data</span>
+        <p><strong>Should I wait, walk to a taxi stand, walk to bus/MRT, or move?</strong></p>
+        <span class="tag">Includes fare pressure proxy</span>
       </button>
     </section>
   </main>
@@ -369,6 +362,6 @@
     }
   </script>
 
-  <script src="/app.js?v=6"></script>
+  <script src="/app.js?v=7"></script>
 </body>
 </html>

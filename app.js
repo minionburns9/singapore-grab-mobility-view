@@ -205,7 +205,7 @@ async function renderPickupReadiness() {
         ["Available taxis shown", mobility.counts.available_taxis],
         ["Unavailable/busy taxi data", "not provided by LTA"]
       ])}
-      ${noteCard("Tap ◎ My Location at the top. This view then shows 300m, 600m and 1km readiness circles around you, nearby available taxis, official taxi stands, road friction, and a recommendation.")}
+      ${noteCard("Tap ◎ My Location at the top. This view then shows 300m, 600m and 1km readiness circles around you, nearby available taxis, official taxi stands, road friction, a fare pressure proxy score, and a recommendation.")}
       ${noteCard("LTA Taxi-Availability only shows taxis currently available for hire. It does not expose hired, busy, booked, Grab-only, or unavailable taxi counts, so this app will not invent those values.")}
     `);
     return;
@@ -216,6 +216,7 @@ async function renderPickupReadiness() {
   const stands = readiness.nearby_taxi_stands || [];
   const incidents = readiness.nearby_traffic_incidents || [];
   const slowSegments = readiness.nearby_slow_speed_segments || [];
+  const pressure = readiness.fare_pressure_proxy || {};
 
   addReadinessRings(userLocation.lat, userLocation.lng);
   addTaxiPoints(taxis, true);
@@ -234,6 +235,8 @@ async function renderPickupReadiness() {
   updateSheet(`
     ${summaryCard("Pickup Readiness", [
       ["Readiness", readiness.readiness_level],
+      ["Fare pressure proxy", `${pressure.level || "N/A"} · ${pressure.score ?? "N/A"}/100`],
+      ["What pressure means", pressure.meaning || "N/A"],
       ["Available taxis within 300m", readiness.available_taxi_counts.within_300m],
       ["Available taxis within 600m", readiness.available_taxi_counts.within_600m],
       ["Available taxis within 1km", readiness.available_taxi_counts.within_1000m],
@@ -243,6 +246,7 @@ async function renderPickupReadiness() {
       ["Unavailable/busy taxis", "not available in LTA feed"]
     ])}
     ${listCard("Recommendation", [readiness.recommendation])}
+    ${listCard("Fare pressure signals", pressure.signals || ["No fare pressure signals returned."])}
     ${legendCard([
       ["Blue dot", "your current location"],
       ["Blue circles", "300m / 600m / 1km readiness radius"],
@@ -272,9 +276,9 @@ async function renderNearby() {
         ["MRT reference stations", mobility.counts.mrt_stations]
       ])}
       ${listCard("3 user decisions this view will answer", [
-        "Wait/book taxi here based on available taxi supply within 300m / 600m / 1km.",
-        "Walk to bus stop with approximate walking time when taxi supply is weak.",
-        "Walk to MRT with approximate walking time, while checking live train disruption alerts."
+        "Should I wait/book a taxi here based on available taxi supply and fare pressure proxy?",
+        "Should I walk to a bus stop, and how many minutes will it take?",
+        "Should I walk to MRT or taxi stand, while checking train and road disruption signals?"
       ])}
       ${noteCard("Tap ◎ My Location. The map will switch to a 1km local view with taxis, bus stops, taxi stands, MRT stations, road incidents, slow road segments and live train alerts.")}
     `);
@@ -290,6 +294,7 @@ async function renderNearby() {
   const incidents = nearby.traffic_incidents || [];
   const slowSegments = nearby.slow_speed_segments || [];
   const trainAlerts = nearby.train_alerts || [];
+  const pressure = decision.fare_pressure_proxy || {};
 
   addReadinessRings(userLocation.lat, userLocation.lng);
   addTaxiPoints(taxis, true);
@@ -320,6 +325,8 @@ async function renderNearby() {
   updateSheet(`
     ${summaryCard("1km Mobility Choices", [
       ["Recommendation", decision.recommendation],
+      ["Fare pressure proxy", `${pressure.level || "N/A"} · ${pressure.score ?? "N/A"}/100`],
+      ["What pressure means", pressure.meaning || "N/A"],
       ["Available taxis within 300m", decision.counts.available_taxis_300m],
       ["Available taxis within 600m", decision.counts.available_taxis_600m],
       ["Available taxis within 1km", decision.counts.available_taxis_1000m],
@@ -328,7 +335,8 @@ async function renderNearby() {
       ["Taxi stands within 1km", decision.counts.taxi_stands_1000m],
       ["Road friction nearby", `${decision.counts.traffic_incidents_1500m} incidents · ${decision.counts.slow_segments_1500m} slow segments`],
       ["Train alerts", `${decision.counts.train_alerts} records · ${decision.counts.major_train_alerts} major`]
-    ])}
+])}
+    ${listCard("Fare pressure signals", pressure.signals || ["No fare pressure signals returned."])}
     ${summaryCard("Option 1: Wait / book taxi", [
       ["Status", decision.decision_options.wait_for_taxi.status],
       ["Available taxis in 600m", decision.decision_options.wait_for_taxi.available_taxis_600m],

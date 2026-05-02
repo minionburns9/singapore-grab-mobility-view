@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 
-app = FastAPI(title="Singapore Grab Mobility View - Live LTA Data Only")
+app = FastAPI(title="Singapore Taxi & Mobility Decision View - Live LTA Data Only")
 
 app.add_middleware(
     CORSMiddleware,
@@ -531,6 +531,92 @@ def readiness_recommendation(level: str, taxis_300: int, taxis_600: int, nearest
         return f"Supply is thin at your exact location. Move toward {nearest_cluster.get('name', 'the nearest supply cluster')} around {nearest_cluster['distance_m']}m away."
     return "Taxi supply looks thin nearby. Consider MRT/bus fallback or wait before booking."
 
+def local_fare_pressure_proxy(
+    taxis_300: int,
+    taxis_600: int,
+    taxis_1000: int,
+    incidents_1500: int,
+    slow_segments_1500: int,
+    nearest_stand: Optional[Dict[str, Any]] = None,
+    major_train_alerts: int = 0,
+) -> Dict[str, Any]:
+    """
+    Local pressure score built only from public LTA signals.
+
+    This is not Grab pricing. It estimates whether a booking attempt from
+    the user's area may feel harder, slower, or less reliable.
+    """
+    score = 0
+    signals: List[str] = []
+
+    if taxis_300 == 0:
+        score += 28
+        signals.append("No available taxis within 300m of the blue dot.")
+    elif taxis_300 <= 2:
+        score += 14
+        signals.append(f"Only {taxis_300} available taxi/taxis within 300m.")
+    else:
+        signals.append(f"{taxis_300} available taxis within 300m supports local pickup.")
+
+    if taxis_600 < 3:
+        score += 20
+        signals.append(f"Limited nearby supply: {taxis_600} available taxi/taxis within 600m.")
+    elif taxis_600 < 6:
+        score += 8
+        signals.append(f"Moderate nearby supply: {taxis_600} available taxis within 600m.")
+    else:
+        signals.append(f"Healthy nearby supply: {taxis_600} available taxis within 600m.")
+
+    if taxis_1000 < 5:
+        score += 16
+        signals.append(f"Thin 1km supply: {taxis_1000} available taxi/taxis within 1km.")
+    else:
+        signals.append(f"{taxis_1000} available taxis within 1km gives fallback supply.")
+
+    if incidents_1500 > 0:
+        score += min(18, incidents_1500 * 6)
+        signals.append(f"{incidents_1500} road incident record(s) within 1.5km may slow pickup movement.")
+
+    if slow_segments_1500 > 0:
+        score += min(18, int(slow_segments_1500 * 1.5))
+        signals.append(f"{slow_segments_1500} slow road segment(s) within 1.5km may increase pickup friction.")
+
+    if nearest_stand:
+        stand_distance = int(nearest_stand.get("distance_m", 999999))
+        if stand_distance <= 500:
+            score -= 8
+            signals.append(f"Nearest official taxi stand/stop is about {stand_distance}m away, giving a safer pickup fallback.")
+        elif stand_distance > 900:
+            score += 8
+            signals.append(f"Nearest official taxi stand/stop is about {stand_distance}m away, so the fallback is not very close.")
+
+    if major_train_alerts > 0:
+        score += min(10, major_train_alerts * 5)
+        signals.append(f"{major_train_alerts} major train alert(s) may push more users toward taxis.")
+
+    score = max(0, min(100, score))
+
+    if score >= 70:
+        level = "High"
+        meaning = "Booking from here may be harder, slower, or less reliable. Consider walking to a better pickup point or public transport fallback."
+    elif score >= 40:
+        level = "Elevated"
+        meaning = "Booking is possible, but nearby supply or road conditions are not ideal. Keep bus/MRT or taxi stand fallback in view."
+    else:
+        level = "Low"
+        meaning = "Public signals do not show strong local pressure. Booking or waiting here is reasonable."
+
+    return {
+        "score": score,
+        "level": level,
+        "meaning": meaning,
+        "not_actual_grab_pricing": True,
+        "signals": signals + [
+            "This is not actual Grab price, fare, demand, booking volume, cancellation risk, or surge multiplier."
+        ],
+    }
+
+
 
 @app.get("/")
 def serve_index():
@@ -546,7 +632,7 @@ def serve_js():
 def health():
     return {
         "status": "running",
-        "message": "Singapore Grab Mobility View API is live",
+        "message": "Singapore Taxi & Mobility Decision View API is live",
         "live_only": True,
         "mock_data_used": False,
         "mapbox_token_configured": get_env_flag("MAPBOX_TOKEN"),
@@ -761,6 +847,14 @@ def pickup_readiness(
     nearest_cluster = clusters_by_distance[0] if clusters_by_distance else None
     level = readiness_level(len(taxis_300), len(taxis_600), len(taxis_1000), len(incidents_1500), len(slow_segments_1500))
     recommendation = readiness_recommendation(level, len(taxis_300), len(taxis_600), nearest_stand, nearest_cluster)
+    fare_pressure_proxy = local_fare_pressure_proxy(
+        taxis_300=len(taxis_300),
+        taxis_600=len(taxis_600),
+        taxis_1000=len(taxis_1000),
+        incidents_1500=len(incidents_1500),
+        slow_segments_1500=len(slow_segments_1500),
+        nearest_stand=nearest_stand,
+    )
 
     return {
         "source": "Derived only from live LTA Taxi-Availability, TaxiStands, TrafficIncidents and v4 TrafficSpeedBands",
@@ -769,6 +863,7 @@ def pickup_readiness(
         "user_location": {"lat": lat, "lng": lng},
         "readiness_level": level,
         "recommendation": recommendation,
+        "fare_pressure_proxy": fare_pressure_proxy,
         "available_taxi_counts": {
             "within_300m": len(taxis_300),
             "within_600m": len(taxis_600),
@@ -983,6 +1078,15 @@ def mobility_decision(
         road_friction_count=road_friction_count,
         major_train_alerts=len(major_train_alerts),
     )
+    fare_pressure_proxy = local_fare_pressure_proxy(
+        taxis_300=len(taxis_300),
+        taxis_600=len(taxis_600),
+        taxis_1000=len(taxis_radius),
+        incidents_1500=len(incidents_1500),
+        slow_segments_1500=len(slow_segments_1500),
+        nearest_stand=nearest_stand,
+        major_train_alerts=len(major_train_alerts),
+    )
 
     return {
         "source": "Live LTA Taxi-Availability, BusStops, TaxiStands, TrafficIncidents, v4 TrafficSpeedBands and TrainServiceAlerts; MRT station coordinates are fixed reference points for walking guidance",
@@ -992,6 +1096,7 @@ def mobility_decision(
         "radius_m": radius_m,
         "walking_speed_assumption": "80 metres/minute, approximate walking time only",
         "recommendation": recommendation,
+        "fare_pressure_proxy": fare_pressure_proxy,
         "decision_options": {
             "wait_for_taxi": {
                 "available_taxis_300m": len(taxis_300),
