@@ -2,6 +2,7 @@ let map;
 let currentView = null;
 let userLocation = null;
 let userLocationMarkerReady = false;
+let choiceRouteAnimationFrameId = null;
 const APP_LOGS = [];
 
 function addLog(message, level = "info", meta = null) {
@@ -104,6 +105,7 @@ async function initMap() {
 }
 
 function clearMapLayers() {
+  stopChoiceRouteAnimation();
   const layers = [
     "taxi-heatmap-layer",
     "taxi-cluster-circles",
@@ -127,7 +129,14 @@ function clearMapLayers() {
     "readiness-ring-labels",
     "readiness-guidance-line",
     "guidance-lines",
-    "guidance-line-labels"
+    "guidance-line-labels",
+    "choice-route-glow",
+    "choice-routes",
+    "choice-route-labels",
+    "choice-route-pulses-glow",
+    "choice-route-pulses",
+    "choice-route-endpoints",
+    "choice-route-endpoint-labels"
   ];
 
   const sources = [
@@ -141,7 +150,11 @@ function clearMapLayers() {
     "speed-source",
     "readiness-rings-source",
     "readiness-line-source",
-    "guidance-lines-source"
+    "guidance-lines-source",
+    "choice-routes-source",
+    "choice-route-label-source",
+    "choice-route-pulses-source",
+    "choice-route-endpoints-source"
   ];
 
   layers.forEach(layer => {
@@ -269,18 +282,18 @@ async function renderNearby() {
     updateSheet(`
       ${summaryCard("1km Mobility Choices", [
         ["Status", "Tap My Location"],
-        ["Why location is needed", "to calculate 1km radius, walking time and fallback options"],
+        ["Why location is needed", "to rank the top 3 options around your blue dot"],
         ["Available taxis shown", mobility.counts.available_taxis],
         ["Bus stops displayed", mobility.counts.bus_stops_displayed],
         ["Taxi stands/stops", mobility.counts.taxi_stands],
         ["MRT reference stations", mobility.counts.mrt_stations]
       ])}
-      ${listCard("3 user decisions this view will answer", [
-        "Should I wait/book a taxi here based on available taxi supply and fare pressure proxy?",
-        "Should I walk to a bus stop, and how many minutes will it take?",
-        "Should I walk to MRT or taxi stand, while checking train and road disruption signals?"
+      ${listCard("Once location is enabled, this view will map 3 decision flows", [
+        "1) Best taxi option from your location",
+        "2) Best bus-stop fallback with approximate walking time",
+        "3) Best MRT fallback with approximate walking time and train-alert check"
       ])}
-      ${noteCard("Tap ◎ My Location. The map will switch to a 1km local view with taxis, bus stops, taxi stands, MRT stations, road incidents, slow road segments and live train alerts.")}
+      ${noteCard("Tap ◎ My Location. This view will animate the top 3 mobility recommendation flows from your location to the recommended taxi, bus-stop and MRT endpoints within 1km.")}
     `);
     return;
   }
@@ -293,7 +306,6 @@ async function renderNearby() {
   const mrtStations = nearby.mrt_stations || [];
   const incidents = nearby.traffic_incidents || [];
   const slowSegments = nearby.slow_speed_segments || [];
-  const trainAlerts = nearby.train_alerts || [];
   const pressure = decision.fare_pressure_proxy || {};
 
   addReadinessRings(userLocation.lat, userLocation.lng);
@@ -304,64 +316,32 @@ async function renderNearby() {
   addIncidentPoints(incidents);
   addSpeedLines(slowSegments, true);
 
-  const lines = [];
-  if (decision.decision_options.walk_to_bus_stop.nearest) {
-    lines.push({ to: decision.decision_options.walk_to_bus_stop.nearest, label: "Bus fallback" });
-  }
-  if (decision.decision_options.walk_to_mrt.nearest) {
-    lines.push({ to: decision.decision_options.walk_to_mrt.nearest, label: "MRT fallback" });
-  }
-  if (decision.decision_options.wait_for_taxi.available_taxis_600m < 4 && taxiStands.length) {
-    lines.push({ to: taxiStands[0], label: "Taxi stand" });
-  }
-  addGuidanceLines(userLocation, lines);
+  const rankedOptions = buildMobilityChoiceOptions(decision);
+  addChoiceRouteFlows(userLocation, rankedOptions);
 
   map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: Math.max(map.getZoom(), 14.2), speed: 0.7 });
 
-  const busNearest = decision.decision_options.walk_to_bus_stop.nearest;
-  const mrtNearest = decision.decision_options.walk_to_mrt.nearest;
-  const standNearest = decision.decision_options.wait_for_taxi.available_taxis_600m < 4 && taxiStands.length ? taxiStands[0] : null;
-
   updateSheet(`
     ${summaryCard("1km Mobility Choices", [
-      ["Recommendation", decision.recommendation],
+      ["Recommended action", decision.recommendation],
       ["Fare pressure proxy", `${pressure.level || "N/A"} · ${pressure.score ?? "N/A"}/100`],
       ["What pressure means", pressure.meaning || "N/A"],
       ["Available taxis within 300m", decision.counts.available_taxis_300m],
       ["Available taxis within 600m", decision.counts.available_taxis_600m],
       ["Available taxis within 1km", decision.counts.available_taxis_1000m],
-      ["Bus stops within 1km", decision.counts.bus_stops_1000m],
-      ["MRT stations within 1km", decision.counts.mrt_stations_1000m],
-      ["Taxi stands within 1km", decision.counts.taxi_stands_1000m],
       ["Road friction nearby", `${decision.counts.traffic_incidents_1500m} incidents · ${decision.counts.slow_segments_1500m} slow segments`],
       ["Train alerts", `${decision.counts.train_alerts} records · ${decision.counts.major_train_alerts} major`]
-])}
+    ])}
+    ${optionCards(rankedOptions)}
     ${listCard("Fare pressure signals", pressure.signals || ["No fare pressure signals returned."])}
-    ${summaryCard("Option 1: Wait / book taxi", [
-      ["Status", decision.decision_options.wait_for_taxi.status],
-      ["Available taxis in 600m", decision.decision_options.wait_for_taxi.available_taxis_600m],
-      ["Available taxis in 1km", decision.decision_options.wait_for_taxi.available_taxis_1000m]
-    ])}
-    ${summaryCard("Option 2: Walk to bus stop", [
-      ["Nearest bus stop", busNearest ? busNearest.name : "None within range"],
-      ["Distance", busNearest ? `${busNearest.distance_m}m` : "N/A"],
-      ["Approx walk", busNearest ? `${busNearest.walk_minutes} min` : "N/A"]
-    ])}
-    ${summaryCard("Option 3: Walk to MRT", [
-      ["Nearest MRT", mrtNearest ? mrtNearest.name : "None within range"],
-      ["Distance", mrtNearest ? `${mrtNearest.distance_m}m` : "N/A"],
-      ["Approx walk", mrtNearest ? `${mrtNearest.walk_minutes} min` : "N/A"],
-      ["Relevant train alert", mrtNearest && mrtNearest.has_relevant_train_alert ? "Yes" : "No"]
-    ])}
     ${legendCard([
       ["Blue dot/circles", "your location and 300m / 600m / 1km radius"],
-      ["Green dots", "available-for-hire taxis only"],
-      ["Blue B", "bus stops"],
-      ["Purple M", "MRT station reference point"],
-      ["Yellow T", "taxi stands/stops"],
+      ["Green flow", "best taxi option"],
+      ["Blue flow", "best bus-stop fallback"],
+      ["Purple flow", "best MRT fallback"],
       ["Red", "road incident or slow segment"]
     ])}
-    ${noteCard("Walking time is approximate using 80m/min and straight-line distance. Bus stop and taxi stand data come from LTA. MRT station points are fixed reference points; live train disruption status comes from LTA TrainServiceAlerts.")}
+    ${noteCard("The animated flows show your top 3 local mobility options from your location. Walking time is approximate using 80m/min and straight-line distance. The taxi flow points to the strongest visible taxi option nearby; it is not an assigned vehicle route.")}
   `);
 }
 
@@ -894,6 +874,365 @@ function addGuidanceLines(from, lines) {
       "text-halo-width": 1.8
     }
   });
+}
+
+
+function buildMobilityChoiceOptions(decision) {
+  const nearby = decision.nearby || {};
+  const pressure = decision.fare_pressure_proxy || {};
+  const taxiOption = decision.decision_options?.wait_for_taxi || {};
+  const busOption = decision.decision_options?.walk_to_bus_stop || {};
+  const mrtOption = decision.decision_options?.walk_to_mrt || {};
+
+  const nearestTaxi = (nearby.available_taxis || [])[0] || null;
+  const nearestStand = (nearby.taxi_stands || [])[0] || null;
+  const busNearest = busOption.nearest || null;
+  const mrtNearest = mrtOption.nearest || null;
+  const taxi600 = Number(taxiOption.available_taxis_600m || 0);
+  const taxi1000 = Number(taxiOption.available_taxis_1000m || 0);
+  const pressureScore = Number(pressure.score || 0);
+
+  const options = [];
+
+  let taxiTarget = null;
+  let taxiAction = "Wait / book taxi";
+  let taxiDetails = `${taxi600} taxis within 600m · ${taxi1000} within 1km`;
+  let taxiWhy = "Available taxi supply is the main signal for booking from here.";
+  let taxiScore = 55 + Math.min(taxi600 * 8, 24) + Math.min(taxi1000 * 2, 10) - Math.round(pressureScore / 5);
+
+  if (nearestStand && (taxi600 < 4 || pressureScore >= 55)) {
+    taxiTarget = nearestStand;
+    taxiAction = "Walk to taxi stand";
+    taxiDetails = `${nearestStand.distance_m}m · ${nearestStand.walk_minutes} min walk`;
+    taxiWhy = "Taxi supply is thinner nearby or fare pressure is elevated, so an official taxi stand is a stronger taxi option.";
+    taxiScore += 8;
+  } else if (nearestTaxi) {
+    taxiTarget = nearestTaxi;
+    taxiAction = "Wait / book taxi here";
+    taxiDetails = taxi600 >= 4 ? `${taxi600} taxis within 600m · book from your current location` : `${nearestTaxi.distance_m}m to the nearest visible available taxi`;
+    taxiWhy = taxi600 >= 4 ? "Supply looks reasonable around your location." : "Visible taxi supply exists nearby, but you may wait longer than usual.";
+  } else if (nearestStand) {
+    taxiTarget = nearestStand;
+    taxiAction = "Walk to taxi stand";
+    taxiDetails = `${nearestStand.distance_m}m · ${nearestStand.walk_minutes} min walk`;
+    taxiWhy = "No visible nearby available taxi was returned, so the nearest official taxi stand is the strongest taxi fallback.";
+  }
+
+  if (taxiTarget) {
+    options.push({
+      key: 'taxi',
+      color: '#22c55e',
+      icon: '🚕',
+      title: taxiAction,
+      shortLabel: taxiAction.includes('stand') ? 'Taxi stand' : 'Taxi now',
+      detail: taxiDetails,
+      why: taxiWhy,
+      endpoint: taxiTarget,
+      score: clamp(Math.round(taxiScore), 1, 99)
+    });
+  }
+
+  if (busNearest) {
+    const busScore = 72 - Math.min(Math.round(busNearest.distance_m / 18), 35) + (pressureScore >= 55 ? 8 : 0);
+    options.push({
+      key: 'bus',
+      color: '#38bdf8',
+      icon: '🚌',
+      title: 'Walk to bus stop',
+      shortLabel: 'Bus stop',
+      detail: `${busNearest.distance_m}m · ${busNearest.walk_minutes} min walk`,
+      why: 'Bus is often the fastest fallback when taxi supply is weak or road friction is rising.',
+      endpoint: busNearest,
+      score: clamp(Math.round(busScore), 1, 99)
+    });
+  }
+
+  if (mrtNearest) {
+    const trainPenalty = mrtNearest.has_relevant_train_alert ? 18 : 0;
+    const mrtScore = 68 - Math.min(Math.round(mrtNearest.distance_m / 20), 38) - trainPenalty;
+    options.push({
+      key: 'mrt',
+      color: '#c084fc',
+      icon: '🚇',
+      title: mrtNearest.has_relevant_train_alert ? 'Walk to MRT carefully' : 'Walk to MRT',
+      shortLabel: 'MRT',
+      detail: `${mrtNearest.distance_m}m · ${mrtNearest.walk_minutes} min walk${mrtNearest.has_relevant_train_alert ? ' · check alert' : ''}`,
+      why: mrtNearest.has_relevant_train_alert ? 'MRT is nearby, but a relevant train alert exists.' : 'MRT is a strong fallback when within walking distance and train service looks normal.',
+      endpoint: mrtNearest,
+      score: clamp(Math.round(mrtScore), 1, 99)
+    });
+  }
+
+  options.sort((a, b) => b.score - a.score);
+  return options.slice(0, 3).map((option, index) => ({ ...option, rank: index + 1 }));
+}
+
+function optionCards(options) {
+  if (!options || !options.length) {
+    return noteCard('No strong mobility options could be ranked from the current location.');
+  }
+
+  return options.map(option => `
+    <div class="info-card" style="border:1px solid ${option.color}; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);">
+      <h3>${escapeHtml(`${option.rank}. ${option.icon} ${option.title}`)}</h3>
+      <div class="metric"><span>Why it ranks here</span><strong style="color:${option.color};">Score ${escapeHtml(option.score)}</strong></div>
+      <div class="metric"><span>Route detail</span><strong>${escapeHtml(option.detail)}</strong></div>
+      <div class="metric"><span>Endpoint</span><strong>${escapeHtml(option.endpoint.name || option.endpoint.description || option.endpoint.type || 'Nearby option')}</strong></div>
+      <div class="metric"><span>Reason</span><strong>${escapeHtml(option.why)}</strong></div>
+    </div>
+  `).join('');
+}
+
+function addChoiceRouteFlows(origin, options) {
+  if (!options || !options.length) return;
+
+  const routeFeatures = [];
+  const labelFeatures = [];
+  const endpointFeatures = [];
+  const animationRoutes = [];
+
+  options.forEach(option => {
+    if (!option.endpoint || option.endpoint.lat == null || option.endpoint.lng == null) return;
+
+    const coords = curvedRouteCoordinates(origin.lng, origin.lat, option.endpoint.lng, option.endpoint.lat, option.rank);
+
+    routeFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: coords },
+      properties: {
+        rank: option.rank,
+        title: option.title,
+        shortLabel: option.shortLabel,
+        detail: option.detail,
+        color: option.color
+      }
+    });
+
+    const midpoint = pointAlongLine(coords, 0.58);
+    labelFeatures.push(pointFeature(midpoint[0], midpoint[1], {
+      text: `${option.rank}. ${option.shortLabel}`,
+      color: option.color
+    }));
+
+    endpointFeatures.push(pointFeature(option.endpoint.lng, option.endpoint.lat, {
+      rank: String(option.rank),
+      title: option.title,
+      color: option.color
+    }));
+
+    animationRoutes.push({
+      id: option.rank,
+      color: option.color,
+      coordinates: coords,
+      offset: option.rank * 0.19
+    });
+  });
+
+  if (!routeFeatures.length) return;
+
+  map.addSource('choice-routes-source', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: routeFeatures }
+  });
+
+  map.addSource('choice-route-label-source', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: labelFeatures }
+  });
+
+  map.addSource('choice-route-endpoints-source', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: endpointFeatures }
+  });
+
+  map.addSource('choice-route-pulses-source', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] }
+  });
+
+  map.addLayer({
+    id: 'choice-route-glow',
+    type: 'line',
+    source: 'choice-routes-source',
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 6, 14, 10],
+      'line-opacity': 0.18,
+      'line-blur': 2.3
+    }
+  });
+
+  map.addLayer({
+    id: 'choice-routes',
+    type: 'line',
+    source: 'choice-routes-source',
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 14, 4],
+      'line-opacity': 0.82,
+      'line-dasharray': [1.6, 1.2]
+    }
+  });
+
+  map.addLayer({
+    id: 'choice-route-labels',
+    type: 'symbol',
+    source: 'choice-route-label-source',
+    layout: {
+      'text-field': ['get', 'text'],
+      'text-size': 11,
+      'text-offset': [0, -0.8],
+      'text-allow-overlap': true
+    },
+    paint: {
+      'text-color': ['get', 'color'],
+      'text-halo-color': '#07111f',
+      'text-halo-width': 1.8
+    }
+  });
+
+  map.addLayer({
+    id: 'choice-route-endpoints',
+    type: 'circle',
+    source: 'choice-route-endpoints-source',
+    paint: {
+      'circle-radius': 11,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.95,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.5
+    }
+  });
+
+  map.addLayer({
+    id: 'choice-route-endpoint-labels',
+    type: 'symbol',
+    source: 'choice-route-endpoints-source',
+    layout: {
+      'text-field': ['get', 'rank'],
+      'text-size': 11,
+      'text-allow-overlap': true
+    },
+    paint: {
+      'text-color': '#ffffff',
+      'text-halo-color': '#07111f',
+      'text-halo-width': 1.5
+    }
+  });
+
+  map.addLayer({
+    id: 'choice-route-pulses-glow',
+    type: 'circle',
+    source: 'choice-route-pulses-source',
+    paint: {
+      'circle-radius': 12,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.18,
+      'circle-blur': 0.9
+    }
+  });
+
+  map.addLayer({
+    id: 'choice-route-pulses',
+    type: 'circle',
+    source: 'choice-route-pulses-source',
+    paint: {
+      'circle-radius': 4.5,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.98,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.1
+    }
+  });
+
+  startChoiceRouteAnimation(animationRoutes);
+}
+
+function startChoiceRouteAnimation(routes) {
+  stopChoiceRouteAnimation();
+  if (!routes || !routes.length || !map.getSource('choice-route-pulses-source')) return;
+
+  function tick() {
+    if (!map || !map.getSource('choice-route-pulses-source')) return;
+
+    const now = performance.now() / 1000;
+    const features = [];
+
+    routes.forEach(route => {
+      [0, 0.45].forEach(extra => {
+        const fraction = (now * 0.16 + route.offset + extra) % 1;
+        const coord = pointAlongLine(route.coordinates, fraction);
+        features.push(pointFeature(coord[0], coord[1], { color: route.color }));
+      });
+    });
+
+    map.getSource('choice-route-pulses-source').setData({
+      type: 'FeatureCollection',
+      features
+    });
+
+    choiceRouteAnimationFrameId = requestAnimationFrame(tick);
+  }
+
+  tick();
+}
+
+function stopChoiceRouteAnimation() {
+  if (choiceRouteAnimationFrameId) {
+    cancelAnimationFrame(choiceRouteAnimationFrameId);
+    choiceRouteAnimationFrameId = null;
+  }
+}
+
+function curvedRouteCoordinates(fromLng, fromLat, toLng, toLat, rank) {
+  const midLng = (fromLng + toLng) / 2;
+  const midLat = (fromLat + toLat) / 2;
+  const dx = toLng - fromLng;
+  const dy = toLat - fromLat;
+  const length = Math.sqrt(dx * dx + dy * dy) || 0.001;
+  const nx = -dy / length;
+  const ny = dx / length;
+  const offset = 0.01 * (rank === 2 ? -0.7 : rank === 3 ? 0.7 : 0.45);
+  return [
+    [fromLng, fromLat],
+    [midLng + nx * offset, midLat + ny * offset],
+    [toLng, toLat]
+  ];
+}
+
+function pointAlongLine(coordinates, fraction) {
+  if (!coordinates || coordinates.length === 0) return [0, 0];
+  if (coordinates.length === 1) return coordinates[0];
+
+  const segments = [];
+  let total = 0;
+  for (let i = 1; i < coordinates.length; i++) {
+    const start = coordinates[i - 1];
+    const end = coordinates[i];
+    const dist = Math.hypot(end[0] - start[0], end[1] - start[1]);
+    segments.push({ start, end, dist });
+    total += dist;
+  }
+
+  const target = total * clamp(fraction, 0, 1);
+  let covered = 0;
+
+  for (const segment of segments) {
+    if (covered + segment.dist >= target) {
+      const inner = segment.dist === 0 ? 0 : (target - covered) / segment.dist;
+      return [
+        segment.start[0] + (segment.end[0] - segment.start[0]) * inner,
+        segment.start[1] + (segment.end[1] - segment.start[1]) * inner
+      ];
+    }
+    covered += segment.dist;
+  }
+
+  return coordinates[coordinates.length - 1];
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 
