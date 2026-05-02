@@ -665,6 +665,76 @@ def mobility():
     }
 
 
+@app.get("/fare-pressure")
+def fare_pressure():
+    """
+    Transparent fare-pressure proxy derived only from live LTA inputs.
+
+    This does NOT return actual Grab fares, surge multipliers, or pricing.
+    It combines live public signals that can make a ride feel harder, slower,
+    or potentially more expensive: available taxi supply, road incidents,
+    slow road segments, and train alerts.
+    """
+    taxi_response = taxis()
+    zone_response = zones(limit=8)
+    incidents_response = traffic_incidents()
+    speed_response = traffic_speed_bands(limit=1500)
+    train_response = train_alerts()
+
+    available_taxis = int(taxi_response["count"])
+    traffic_incidents_count = int(incidents_response["count"])
+    train_alerts_count = int(train_response["count"])
+    slow_segments = [
+        row for row in speed_response["data"]
+        if row.get("speed_band") is not None and row["speed_band"] <= 3
+    ]
+
+    # Deterministic scoring model. No random values and no private Grab pricing.
+    # Lower live taxi availability contributes to pressure; road/train friction adds pressure.
+    supply_scarcity_points = max(0, min(40, int((2200 - available_taxis) / 55)))
+    incident_points = min(25, traffic_incidents_count * 4)
+    slow_segment_points = min(25, int(len(slow_segments) / 10))
+    train_alert_points = min(10, train_alerts_count * 5)
+
+    score = max(0, min(100, supply_scarcity_points + incident_points + slow_segment_points + train_alert_points))
+
+    if score >= 70:
+        pressure_level = "High"
+    elif score >= 40:
+        pressure_level = "Medium"
+    else:
+        pressure_level = "Low"
+
+    explanations = [
+        f"{available_taxis} available taxis currently reported by LTA Taxi-Availability.",
+        f"{traffic_incidents_count} current road incident records from LTA TrafficIncidents.",
+        f"{len(slow_segments)} slow road segments from LTA v4 TrafficSpeedBands where SpeedBand <= 3.",
+        f"{train_alerts_count} current train alert records from LTA TrainServiceAlerts.",
+        "No Grab fare, demand, booking, cancellation, or surge multiplier data is used."
+    ]
+
+    return {
+        "source": "Derived only from live LTA Taxi-Availability, TrafficIncidents, v4 TrafficSpeedBands and TrainServiceAlerts",
+        "live_only": True,
+        "mock_data_used": False,
+        "not_actual_grab_pricing": True,
+        "fare_pressure_proxy_score": score,
+        "pressure_level": pressure_level,
+        "available_taxis": available_taxis,
+        "top_supply_clusters": zone_response["data"],
+        "traffic_incidents": incidents_response["data"],
+        "slow_speed_segments": slow_segments,
+        "train_alerts": train_response["data"],
+        "counts": {
+            "traffic_incidents": traffic_incidents_count,
+            "slow_speed_segments": len(slow_segments),
+            "train_alerts": train_alerts_count,
+        },
+        "explanations": explanations,
+        "updated_at_utc": now_iso(),
+    }
+
+
 @app.get("/road-friction")
 def road_friction():
     incidents_response = traffic_incidents()

@@ -306,31 +306,31 @@
 
     <section class="cards">
       <button class="card" onclick="openView('heatmap')">
-        <div class="card-icon">🔥</div>
-        <h2>Live Taxi Supply Heatmap</h2>
-        <p>See where available taxis are currently clustered across Singapore.</p>
+        <div class="card-icon">⬡</div>
+        <h2>Live Taxi Supply Hexmap</h2>
+        <p>See where available taxis are clustered in translucent hexagons across Singapore.</p>
         <span class="tag">Live taxi availability</span>
       </button>
 
       <button class="card" onclick="openView('forecast')">
-        <div class="card-icon">📈</div>
+        <div class="card-icon">⬢</div>
         <h2>Supply Snapshot</h2>
-        <p>View current available taxi count and strongest live supply clusters.</p>
+        <p>View current available taxi count and strongest live supply hexagons.</p>
         <span class="tag">Live supply summary</span>
       </button>
 
       <button class="card" onclick="openView('nearby')">
         <div class="card-icon">🚕</div>
         <h2>Nearby Mobility</h2>
-        <p>Show available taxis, bus stops and taxi stands from live LTA APIs.</p>
+        <p>Show available taxis, bus stops, taxi stands, and direction from your blue dot.</p>
         <span class="tag">Supply visibility</span>
       </button>
 
       <button class="card" onclick="openView('surge')">
         <div class="card-icon">🚦</div>
-        <h2>Road Friction</h2>
-        <p>Identify traffic incidents and slow road segments that may affect pickup movement.</p>
-        <span class="tag">Traffic intelligence</span>
+        <h2>Fare Pressure Proxy</h2>
+        <p>Use live taxi supply, road incidents and slow road segments to estimate ride friction without showing fake fares.</p>
+        <span class="tag">Live proxy · no fare claims</span>
       </button>
 
       <button class="card" onclick="openView('pickup')">
@@ -354,6 +354,7 @@
 
     <div id="topBar">
       <button class="topButton" onclick="goHome()">← Home</button>
+      <button class="topButton" onclick="locateUser()">◎ My Location</button>
       <div class="topPill" id="topMode">Map View</div>
     </div>
 
@@ -382,6 +383,6 @@
     }
   </script>
 
-  <script src="/app.js?v=2"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>
