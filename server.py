@@ -1,12 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
-import random
-import math
-from datetime import datetime
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-app = FastAPI(title="Singapore Grab Mobility View")
+import requests
+
+
+app = FastAPI(title="Singapore Grab Mobility View - Live LTA Data Only")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,6 +17,295 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+LTA_BASE_URL = "https://datamall2.mytransport.sg/ltaodataservice"
+
+CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def get_env_flag(name: str) -> bool:
+    value = os.getenv(name)
+    return bool(value and value.strip())
+
+
+def lta_headers() -> Dict[str, str]:
+    account_key = os.getenv("LTA_ACCOUNT_KEY")
+    if not account_key:
+        raise HTTPException(
+            status_code=500,
+            detail="LTA_ACCOUNT_KEY is not configured in Render environment variables.",
+        )
+
+    return {
+        "AccountKey": account_key,
+        "accept": "application/json",
+    }
+
+
+def cache_get(key: str, ttl_seconds: int) -> Optional[Any]:
+    item = CACHE.get(key)
+    if not item:
+        return None
+
+    age = time.time() - item["created_at"]
+    if age > ttl_seconds:
+        return None
+
+    return item["data"]
+
+
+def cache_set(key: str, data: Any) -> Any:
+    CACHE[key] = {
+        "created_at": time.time(),
+        "data": data,
+    }
+    return data
+
+
+def extract_lta_value(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        value = payload.get("value")
+        if isinstance(value, list):
+            return value
+        if isinstance(payload.get("Services"), list):
+            return payload["Services"]
+        return []
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def lta_get(endpoint: str, params: Optional[Dict[str, Any]] = None, ttl_seconds: int = 60) -> List[Dict[str, Any]]:
+    params = params or {}
+    cache_key = f"{endpoint}:{json_key(params)}"
+
+    cached = cache_get(cache_key, ttl_seconds)
+    if cached is not None:
+        return cached
+
+    url = f"{LTA_BASE_URL}/{endpoint}"
+
+    try:
+        response = requests.get(
+            url,
+            headers=lta_headers(),
+            params=params,
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"LTA request failed: {exc}")
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"LTA API error for {endpoint}: {response.text[:300]}",
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail=f"LTA returned non-JSON response for {endpoint}.")
+
+    data = extract_lta_value(payload)
+    return cache_set(cache_key, data)
+
+
+def lta_get_paged(endpoint: str, ttl_seconds: int = 3600, max_pages: int = 30) -> List[Dict[str, Any]]:
+    cache_key = f"{endpoint}:paged:{max_pages}"
+
+    cached = cache_get(cache_key, ttl_seconds)
+    if cached is not None:
+        return cached
+
+    all_rows: List[Dict[str, Any]] = []
+
+    for page in range(max_pages):
+        skip = page * 500
+        rows = lta_get(endpoint, params={"$skip": skip}, ttl_seconds=ttl_seconds)
+        all_rows.extend(rows)
+
+        if len(rows) < 500:
+            break
+
+    return cache_set(cache_key, all_rows)
+
+
+def json_key(params: Dict[str, Any]) -> str:
+    if not params:
+        return "none"
+    return "&".join(f"{key}={params[key]}" for key in sorted(params.keys()))
+
+
+def as_float(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        number = float(value)
+        if number == 0:
+            return None
+        return number
+    except (TypeError, ValueError):
+        return None
+
+
+def is_sg_coordinate(lat: Optional[float], lng: Optional[float]) -> bool:
+    if lat is None or lng is None:
+        return False
+    return 1.15 <= lat <= 1.50 and 103.55 <= lng <= 104.10
+
+
+def normalise_taxi(row: Dict[str, Any], index: int) -> Optional[Dict[str, Any]]:
+    lat = as_float(row.get("Latitude"))
+    lng = as_float(row.get("Longitude"))
+
+    if not is_sg_coordinate(lat, lng):
+        return None
+
+    return {
+        "id": f"LTA-AVAILABLE-TAXI-{index + 1}",
+        "lat": lat,
+        "lng": lng,
+        "status": "Available for hire",
+        "source": "LTA Taxi-Availability",
+    }
+
+
+def normalise_bus_stop(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    lat = as_float(row.get("Latitude"))
+    lng = as_float(row.get("Longitude"))
+
+    if not is_sg_coordinate(lat, lng):
+        return None
+
+    return {
+        "bus_stop_code": row.get("BusStopCode"),
+        "road_name": row.get("RoadName"),
+        "description": row.get("Description"),
+        "name": f"{row.get('Description') or 'Bus Stop'} ({row.get('BusStopCode')})",
+        "lat": lat,
+        "lng": lng,
+        "source": "LTA BusStops",
+    }
+
+
+def normalise_taxi_stand(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    lat = as_float(row.get("Latitude"))
+    lng = as_float(row.get("Longitude"))
+
+    if not is_sg_coordinate(lat, lng):
+        return None
+
+    return {
+        "taxi_code": row.get("TaxiCode"),
+        "name": row.get("Name") or row.get("TaxiCode") or "Taxi Stand",
+        "lat": lat,
+        "lng": lng,
+        "barrier_free": row.get("Bfa"),
+        "ownership": row.get("Ownership"),
+        "type": row.get("Type"),
+        "source": "LTA TaxiStands",
+    }
+
+
+def normalise_traffic_incident(row: Dict[str, Any], index: int) -> Optional[Dict[str, Any]]:
+    lat = as_float(row.get("Latitude"))
+    lng = as_float(row.get("Longitude"))
+
+    if not is_sg_coordinate(lat, lng):
+        return None
+
+    return {
+        "id": f"LTA-INCIDENT-{index + 1}",
+        "type": row.get("Type") or "Traffic Incident",
+        "lat": lat,
+        "lng": lng,
+        "message": row.get("Message") or "",
+        "source": "LTA TrafficIncidents",
+    }
+
+
+def normalise_speed_band(row: Dict[str, Any], index: int) -> Optional[Dict[str, Any]]:
+    start_lat = as_float(row.get("StartLat"))
+    start_lng = as_float(row.get("StartLon"))
+    end_lat = as_float(row.get("EndLat"))
+    end_lng = as_float(row.get("EndLon"))
+
+    if not (is_sg_coordinate(start_lat, start_lng) and is_sg_coordinate(end_lat, end_lng)):
+        return None
+
+    speed_band = row.get("SpeedBand")
+    min_speed = row.get("MinimumSpeed")
+    max_speed = row.get("MaximumSpeed")
+
+    try:
+        speed_band_number = int(speed_band)
+    except (TypeError, ValueError):
+        speed_band_number = None
+
+    return {
+        "id": f"LTA-SPEEDBAND-{index + 1}",
+        "link_id": row.get("LinkID"),
+        "road_name": row.get("RoadName"),
+        "road_category": row.get("RoadCategory"),
+        "speed_band": speed_band_number,
+        "minimum_speed": min_speed,
+        "maximum_speed": max_speed,
+        "start_lat": start_lat,
+        "start_lng": start_lng,
+        "end_lat": end_lat,
+        "end_lng": end_lng,
+        "source": "LTA v4 TrafficSpeedBands",
+    }
+
+
+def normalise_train_alert(row: Dict[str, Any], index: int) -> Dict[str, Any]:
+    return {
+        "id": f"LTA-TRAIN-ALERT-{index + 1}",
+        "status": row.get("Status"),
+        "line": row.get("Line"),
+        "direction": row.get("Direction"),
+        "stations": row.get("Stations"),
+        "free_public_bus": row.get("FreePublicBus"),
+        "free_mrt_shuttle": row.get("FreeMRTShuttle"),
+        "mrt_shuttle_direction": row.get("MRTShuttleDirection"),
+        "message": row.get("Message"),
+        "source": "LTA TrainServiceAlerts",
+    }
+
+
+def cluster_taxis(taxis: List[Dict[str, Any]], grid_size: float = 0.015) -> List[Dict[str, Any]]:
+    buckets: Dict[str, Dict[str, Any]] = {}
+
+    for taxi in taxis:
+        lat = taxi["lat"]
+        lng = taxi["lng"]
+
+        grid_lat = round(lat / grid_size) * grid_size
+        grid_lng = round(lng / grid_size) * grid_size
+        key = f"{grid_lat:.5f},{grid_lng:.5f}"
+
+        if key not in buckets:
+            buckets[key] = {
+                "zone": f"Taxi supply cluster {len(buckets) + 1}",
+                "lat": grid_lat,
+                "lng": grid_lng,
+                "available_taxis": 0,
+            }
+
+        buckets[key]["available_taxis"] += 1
+
+    clusters = list(buckets.values())
+    clusters.sort(key=lambda row: row["available_taxis"], reverse=True)
+
+    for index, cluster in enumerate(clusters):
+        cluster["name"] = f"Live taxi cluster {index + 1}"
+        cluster["value"] = cluster["available_taxis"]
+
+    return clusters
 
 
 @app.get("/")
@@ -30,169 +322,262 @@ def serve_js():
 def health():
     return {
         "status": "running",
-        "message": "Singapore Grab Mobility View API is live"
+        "message": "Singapore Grab Mobility View API is live",
+        "live_only": True,
+        "mock_data_used": False,
+        "mapbox_token_configured": get_env_flag("MAPBOX_TOKEN"),
+        "lta_account_key_configured": get_env_flag("LTA_ACCOUNT_KEY"),
+        "server_time_utc": now_iso(),
     }
 
 
 @app.get("/config")
 def config():
     return JSONResponse({
-        "mapbox_token": os.getenv("MAPBOX_TOKEN")
+        "mapbox_token": os.getenv("MAPBOX_TOKEN"),
     })
-
-
-SINGAPORE_ZONES = [
-    {"name": "CBD / Raffles Place", "lat": 1.2838, "lng": 103.8514, "demand": 92, "surge": "High", "pickup_risk": "Medium"},
-    {"name": "Marina Bay", "lat": 1.2830, "lng": 103.8600, "demand": 88, "surge": "High", "pickup_risk": "High"},
-    {"name": "Orchard", "lat": 1.3048, "lng": 103.8318, "demand": 84, "surge": "High", "pickup_risk": "Medium"},
-    {"name": "Changi Airport", "lat": 1.3644, "lng": 103.9915, "demand": 78, "surge": "Medium", "pickup_risk": "Low"},
-    {"name": "Jurong East", "lat": 1.3329, "lng": 103.7436, "demand": 70, "surge": "Medium", "pickup_risk": "Medium"},
-    {"name": "Tampines", "lat": 1.3496, "lng": 103.9568, "demand": 66, "surge": "Medium", "pickup_risk": "Medium"},
-    {"name": "Woodlands", "lat": 1.4360, "lng": 103.7860, "demand": 58, "surge": "Low", "pickup_risk": "Medium"},
-    {"name": "Punggol", "lat": 1.4052, "lng": 103.9023, "demand": 61, "surge": "Medium", "pickup_risk": "Medium"},
-    {"name": "Sentosa", "lat": 1.2494, "lng": 103.8303, "demand": 55, "surge": "Medium", "pickup_risk": "High"},
-    {"name": "Bugis", "lat": 1.3006, "lng": 103.8560, "demand": 72, "surge": "Medium", "pickup_risk": "Medium"},
-    {"name": "Novena", "lat": 1.3204, "lng": 103.8439, "demand": 52, "surge": "Low", "pickup_risk": "Low"},
-    {"name": "One-North", "lat": 1.2998, "lng": 103.7871, "demand": 64, "surge": "Medium", "pickup_risk": "Medium"},
-]
-
-
-MRT_STATIONS = [
-    {"name": "Raffles Place MRT", "lat": 1.2839, "lng": 103.8514},
-    {"name": "Orchard MRT", "lat": 1.3040, "lng": 103.8320},
-    {"name": "City Hall MRT", "lat": 1.2932, "lng": 103.8520},
-    {"name": "Bugis MRT", "lat": 1.3006, "lng": 103.8560},
-    {"name": "Jurong East MRT", "lat": 1.3331, "lng": 103.7423},
-    {"name": "Tampines MRT", "lat": 1.3533, "lng": 103.9451},
-    {"name": "Woodlands MRT", "lat": 1.4369, "lng": 103.7865},
-    {"name": "Punggol MRT", "lat": 1.4045, "lng": 103.9020},
-    {"name": "Changi Airport MRT", "lat": 1.3575, "lng": 103.9878},
-    {"name": "HarbourFront MRT", "lat": 1.2653, "lng": 103.8215},
-]
-
-
-@app.get("/zones")
-def zones():
-    hour = datetime.now().hour
-    modifier = 1.0
-
-    if 7 <= hour <= 9:
-        modifier = 1.2
-    elif 17 <= hour <= 20:
-        modifier = 1.25
-    elif 22 <= hour or hour <= 1:
-        modifier = 1.15
-
-    result = []
-
-    for zone in SINGAPORE_ZONES:
-        demand = min(100, int(zone["demand"] * modifier + random.randint(-8, 8)))
-
-        result.append({
-            **zone,
-            "demand": demand,
-            "supply": max(10, 100 - demand + random.randint(-8, 15)),
-            "eta_minutes": max(2, int(12 - demand / 12 + random.randint(-2, 3))),
-            "surge_score": min(100, int(demand * random.uniform(0.85, 1.15))),
-        })
-
-    return result
 
 
 @app.get("/taxis")
 def taxis():
-    taxis_data = []
+    rows = lta_get("Taxi-Availability", ttl_seconds=60)
+    result = []
 
-    for i in range(120):
-        zone = random.choice(SINGAPORE_ZONES)
-        lat = zone["lat"] + random.uniform(-0.018, 0.018)
-        lng = zone["lng"] + random.uniform(-0.018, 0.018)
+    for index, row in enumerate(rows):
+        taxi = normalise_taxi(row, index)
+        if taxi:
+            result.append(taxi)
 
-        taxis_data.append({
-            "id": f"TX-{1000 + i}",
-            "lat": round(lat, 6),
-            "lng": round(lng, 6),
-            "status": random.choice(["Available", "On Trip", "En Route", "Idle"]),
-            "vehicle_type": random.choice(["JustGrab", "GrabCar", "Taxi", "Premium"]),
-            "eta_minutes": random.randint(2, 12)
-        })
+    return {
+        "source": "LTA Taxi-Availability",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": len(result),
+        "updated_at_utc": now_iso(),
+        "data": result,
+    }
 
-    return taxis_data
+
+@app.get("/zones")
+def zones(limit: int = Query(default=100, ge=1, le=300)):
+    taxi_response = taxis()
+    taxi_rows = taxi_response["data"]
+    clusters = cluster_taxis(taxi_rows)[:limit]
+
+    return {
+        "source": "Derived only from live LTA Taxi-Availability",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": len(clusters),
+        "taxi_count": len(taxi_rows),
+        "updated_at_utc": now_iso(),
+        "data": clusters,
+    }
+
+
+@app.get("/supply-summary")
+def supply_summary():
+    zone_response = zones(limit=20)
+    taxi_count = zone_response["taxi_count"]
+    clusters = zone_response["data"]
+
+    return {
+        "source": "Derived only from live LTA Taxi-Availability",
+        "live_only": True,
+        "mock_data_used": False,
+        "available_taxis": taxi_count,
+        "visible_clusters": len(clusters),
+        "top_clusters": clusters[:5],
+        "updated_at_utc": now_iso(),
+    }
+
+
+@app.get("/bus-stops")
+def bus_stops(limit: int = Query(default=700, ge=1, le=6000)):
+    rows = lta_get_paged("BusStops", ttl_seconds=86400, max_pages=20)
+    result = []
+
+    for row in rows:
+        bus_stop = normalise_bus_stop(row)
+        if bus_stop:
+            result.append(bus_stop)
+
+    return {
+        "source": "LTA BusStops",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": min(len(result), limit),
+        "total_available_from_lta": len(result),
+        "updated_at_utc": now_iso(),
+        "data": result[:limit],
+    }
+
+
+@app.get("/taxi-stands")
+def taxi_stands():
+    rows = lta_get("TaxiStands", ttl_seconds=86400)
+    result = []
+
+    for row in rows:
+        stand = normalise_taxi_stand(row)
+        if stand:
+            result.append(stand)
+
+    return {
+        "source": "LTA TaxiStands",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": len(result),
+        "updated_at_utc": now_iso(),
+        "data": result,
+    }
+
+
+@app.get("/traffic-incidents")
+def traffic_incidents():
+    rows = lta_get("TrafficIncidents", ttl_seconds=120)
+    result = []
+
+    for index, row in enumerate(rows):
+        incident = normalise_traffic_incident(row, index)
+        if incident:
+            result.append(incident)
+
+    return {
+        "source": "LTA TrafficIncidents",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": len(result),
+        "updated_at_utc": now_iso(),
+        "data": result,
+    }
+
+
+@app.get("/traffic-speed-bands")
+def traffic_speed_bands(limit: int = Query(default=1200, ge=1, le=5000)):
+    rows = lta_get_paged("v4/TrafficSpeedBands", ttl_seconds=300, max_pages=10)
+    result = []
+
+    for index, row in enumerate(rows):
+        speed_band = normalise_speed_band(row, index)
+        if speed_band:
+            result.append(speed_band)
+
+    return {
+        "source": "LTA v4 TrafficSpeedBands",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": min(len(result), limit),
+        "total_available_from_lta": len(result),
+        "updated_at_utc": now_iso(),
+        "data": result[:limit],
+    }
+
+
+@app.get("/train-alerts")
+def train_alerts():
+    rows = lta_get("TrainServiceAlerts", ttl_seconds=120)
+    result = [normalise_train_alert(row, index) for index, row in enumerate(rows)]
+
+    return {
+        "source": "LTA TrainServiceAlerts",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": len(result),
+        "updated_at_utc": now_iso(),
+        "data": result,
+    }
 
 
 @app.get("/mobility")
 def mobility():
-    bus_stops = []
-
-    for i in range(80):
-        zone = random.choice(SINGAPORE_ZONES)
-        bus_stops.append({
-            "name": f"Bus Stop {30000 + i}",
-            "lat": round(zone["lat"] + random.uniform(-0.025, 0.025), 6),
-            "lng": round(zone["lng"] + random.uniform(-0.025, 0.025), 6),
-            "type": "Bus Stop"
-        })
+    taxi_response = taxis()
+    bus_response = bus_stops(limit=700)
+    stands_response = taxi_stands()
 
     return {
-        "mrt_stations": MRT_STATIONS,
-        "bus_stops": bus_stops
+        "source": "Live LTA Taxi-Availability, BusStops and TaxiStands",
+        "live_only": True,
+        "mock_data_used": False,
+        "updated_at_utc": now_iso(),
+        "taxis": taxi_response["data"],
+        "bus_stops": bus_response["data"],
+        "taxi_stands": stands_response["data"],
+        "counts": {
+            "available_taxis": taxi_response["count"],
+            "bus_stops_displayed": bus_response["count"],
+            "taxi_stands": stands_response["count"],
+        },
     }
 
 
-@app.get("/forecast")
-def forecast():
-    windows = [
-        "07:30", "07:45", "08:00", "08:15", "08:30", "08:45",
-        "09:00", "12:00", "17:30", "18:00", "18:30", "19:00",
-        "21:30", "22:00", "22:30", "23:00"
+@app.get("/road-friction")
+def road_friction():
+    incidents_response = traffic_incidents()
+    speed_response = traffic_speed_bands(limit=1500)
+
+    slow_segments = [
+        row for row in speed_response["data"]
+        if row.get("speed_band") is not None and row["speed_band"] <= 3
     ]
 
-    data = []
-
-    for window in windows:
-        peak = 40
-
-        if window.startswith("08") or window.startswith("18"):
-            peak = 85
-        elif window.startswith("22") or window.startswith("23"):
-            peak = 70
-        elif window.startswith("12"):
-            peak = 55
-
-        data.append({
-            "time": window,
-            "demand_index": min(100, max(10, peak + random.randint(-12, 12))),
-            "expected_wait": max(2, int(14 - peak / 10 + random.randint(-2, 4))),
-            "surge_risk": "High" if peak > 75 else "Medium" if peak > 55 else "Low"
-        })
-
-    return data
+    return {
+        "source": "Live LTA TrafficIncidents and v4 TrafficSpeedBands",
+        "live_only": True,
+        "mock_data_used": False,
+        "updated_at_utc": now_iso(),
+        "traffic_incidents": incidents_response["data"],
+        "slow_speed_segments": slow_segments,
+        "counts": {
+            "traffic_incidents": incidents_response["count"],
+            "slow_speed_segments": len(slow_segments),
+        },
+    }
 
 
+@app.get("/disruptions")
+def disruptions():
+    incidents_response = traffic_incidents()
+    train_response = train_alerts()
+
+    return {
+        "source": "Live LTA TrafficIncidents and TrainServiceAlerts",
+        "live_only": True,
+        "mock_data_used": False,
+        "updated_at_utc": now_iso(),
+        "traffic_incidents": incidents_response["data"],
+        "train_alerts": train_response["data"],
+        "counts": {
+            "traffic_incidents": incidents_response["count"],
+            "train_alerts": train_response["count"],
+        },
+    }
+
+
+# Compatibility endpoint retained so old browser tabs do not break.
+# It no longer returns forecasted or simulated data.
+@app.get("/forecast")
+def forecast():
+    summary = supply_summary()
+    return {
+        "source": "No live public Grab demand forecast is available. This endpoint returns current live taxi supply only.",
+        "live_only": True,
+        "mock_data_used": False,
+        "updated_at_utc": now_iso(),
+        "available_taxis": summary["available_taxis"],
+        "top_clusters": summary["top_clusters"],
+    }
+
+
+# Compatibility endpoint retained so old browser tabs do not break.
+# It no longer returns simulated pickup risk.
 @app.get("/pickup-risk")
 def pickup_risk():
-    result = []
-
-    for zone in SINGAPORE_ZONES:
-        risk_score = {
-            "Low": random.randint(20, 40),
-            "Medium": random.randint(45, 70),
-            "High": random.randint(72, 95)
-        }[zone["pickup_risk"]]
-
-        result.append({
-            "zone": zone["name"],
-            "lat": zone["lat"],
-            "lng": zone["lng"],
-            "risk": zone["pickup_risk"],
-            "risk_score": risk_score,
-            "reason": random.choice([
-                "High pickup confusion",
-                "Mall / taxi-stand congestion",
-                "Road access constraints",
-                "Event or crowd pressure",
-                "Driver stopping restrictions"
-            ])
-        })
-
-    return result
+    stands = taxi_stands()
+    return {
+        "source": "No live public pickup-risk API is available. This endpoint returns official live LTA TaxiStands only.",
+        "live_only": True,
+        "mock_data_used": False,
+        "updated_at_utc": now_iso(),
+        "data": stands["data"],
+    }

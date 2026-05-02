@@ -77,6 +77,7 @@
       min-height: 132px;
       box-shadow: 0 10px 24px rgba(0,0,0,0.28);
       border: 1px solid rgba(255,255,255,0.08);
+      cursor: pointer;
     }
 
     .card:active {
@@ -146,6 +147,7 @@
       font-size: 13px;
       box-shadow: 0 4px 14px rgba(0,0,0,0.35);
       border: 1px solid rgba(255,255,255,0.12);
+      cursor: pointer;
     }
 
     #bottomSheet {
@@ -268,7 +270,7 @@
         right: auto;
         top: 16px;
         bottom: 16px;
-        width: 360px;
+        width: 380px;
         height: auto;
         max-height: none;
         border-radius: 16px;
@@ -298,51 +300,51 @@
   <main id="home">
     <section class="hero">
       <h1>Singapore Grab Mobility View</h1>
-      <p>Mobile-first map views for taxi demand, nearby mobility, pickup reliability and surge-risk intelligence.</p>
-      <div class="status-pill">Prototype using simulated demand + live-ready map architecture</div>
+      <p>Mobile-first live mobility intelligence using LTA DataMall taxi, road, bus stop, taxi stand and train-alert APIs.</p>
+      <div class="status-pill">Live LTA DataMall data · No mock or simulated mobility data</div>
     </section>
 
     <section class="cards">
       <button class="card" onclick="openView('heatmap')">
         <div class="card-icon">🔥</div>
-        <h2>Demand Heatmap</h2>
-        <p>See high-demand pickup zones across Singapore.</p>
-        <span class="tag">Demand intelligence</span>
+        <h2>Live Taxi Supply Heatmap</h2>
+        <p>See where available taxis are currently clustered across Singapore.</p>
+        <span class="tag">Live taxi availability</span>
       </button>
 
       <button class="card" onclick="openView('forecast')">
         <div class="card-icon">📈</div>
-        <h2>Taxi Demand Forecast</h2>
-        <p>View demand and waiting-time risk by time window.</p>
-        <span class="tag">Time-based planning</span>
+        <h2>Supply Snapshot</h2>
+        <p>View current available taxi count and strongest live supply clusters.</p>
+        <span class="tag">Live supply summary</span>
       </button>
 
       <button class="card" onclick="openView('nearby')">
         <div class="card-icon">🚕</div>
         <h2>Nearby Mobility</h2>
-        <p>Show taxis, MRT stations and bus stops nearby.</p>
+        <p>Show available taxis, bus stops and taxi stands from live LTA APIs.</p>
         <span class="tag">Supply visibility</span>
       </button>
 
       <button class="card" onclick="openView('surge')">
-        <div class="card-icon">💸</div>
-        <h2>Fare Shock / Surge Risk</h2>
-        <p>Identify areas where pricing may be elevated.</p>
-        <span class="tag">Price predictability</span>
+        <div class="card-icon">🚦</div>
+        <h2>Road Friction</h2>
+        <p>Identify traffic incidents and slow road segments that may affect pickup movement.</p>
+        <span class="tag">Traffic intelligence</span>
       </button>
 
       <button class="card" onclick="openView('pickup')">
         <div class="card-icon">📍</div>
-        <h2>Pickup Reliability</h2>
-        <p>Find hard pickup zones and safer pickup alternatives.</p>
-        <span class="tag">Cancellation reduction</span>
+        <h2>Official Taxi Stands</h2>
+        <p>Find LTA taxi stands and stops, including barrier-free status where available.</p>
+        <span class="tag">Pickup infrastructure</span>
       </button>
 
       <button class="card" onclick="openView('disruption')">
-        <div class="card-icon">🌧️</div>
-        <h2>Event & Weather Disruption</h2>
-        <p>Spot airport, rain, event and late-night demand pressure.</p>
-        <span class="tag">Disruption response</span>
+        <div class="card-icon">⚠️</div>
+        <h2>Traffic + Train Disruption</h2>
+        <p>Spot current road incidents and train service alerts.</p>
+        <span class="tag">Live disruption response</span>
       </button>
     </section>
   </main>
@@ -380,6 +382,6 @@
     }
   </script>
 
-  <script src="/app.js?v=1"></script>
+  <script src="/app.js?v=2"></script>
 </body>
 </html>
