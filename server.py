@@ -25,6 +25,71 @@ CACHE: Dict[str, Dict[str, Any]] = {}
 SERVER_LOGS: List[Dict[str, Any]] = []
 
 
+# Fixed MRT/LRT station reference layer for walking-distance guidance.
+# LTA dynamic APIs provide live train alerts, but the dynamic API guide does not expose a simple MRT station coordinate endpoint.
+# These are real station reference coordinates used only for nearest-station walking guidance; train disruption status still comes from live LTA TrainServiceAlerts.
+MRT_STATIONS: List[Dict[str, Any]] = [
+    {"code": "NS1/EW24", "name": "Jurong East MRT", "lat": 1.3331, "lng": 103.7423, "lines": ["NSL", "EWL"]},
+    {"code": "EW23", "name": "Clementi MRT", "lat": 1.3151, "lng": 103.7652, "lines": ["EWL"]},
+    {"code": "EW22", "name": "Dover MRT", "lat": 1.3114, "lng": 103.7786, "lines": ["EWL"]},
+    {"code": "EW21/CC22", "name": "Buona Vista MRT", "lat": 1.3072, "lng": 103.7902, "lines": ["EWL", "CCL"]},
+    {"code": "EW20", "name": "Commonwealth MRT", "lat": 1.3024, "lng": 103.7983, "lines": ["EWL"]},
+    {"code": "EW19", "name": "Queenstown MRT", "lat": 1.2949, "lng": 103.8060, "lines": ["EWL"]},
+    {"code": "EW18", "name": "Redhill MRT", "lat": 1.2896, "lng": 103.8168, "lines": ["EWL"]},
+    {"code": "EW17", "name": "Tiong Bahru MRT", "lat": 1.2862, "lng": 103.8270, "lines": ["EWL"]},
+    {"code": "EW16/NE3/TE17", "name": "Outram Park MRT", "lat": 1.2803, "lng": 103.8395, "lines": ["EWL", "NEL", "TEL"]},
+    {"code": "EW15", "name": "Tanjong Pagar MRT", "lat": 1.2765, "lng": 103.8459, "lines": ["EWL"]},
+    {"code": "EW14/NS26", "name": "Raffles Place MRT", "lat": 1.2840, "lng": 103.8513, "lines": ["EWL", "NSL"]},
+    {"code": "NS25/EW13", "name": "City Hall MRT", "lat": 1.2931, "lng": 103.8521, "lines": ["NSL", "EWL"]},
+    {"code": "EW12/DT14", "name": "Bugis MRT", "lat": 1.3006, "lng": 103.8564, "lines": ["EWL", "DTL"]},
+    {"code": "EW11", "name": "Lavender MRT", "lat": 1.3074, "lng": 103.8628, "lines": ["EWL"]},
+    {"code": "EW10", "name": "Kallang MRT", "lat": 1.3115, "lng": 103.8714, "lines": ["EWL"]},
+    {"code": "EW9", "name": "Aljunied MRT", "lat": 1.3164, "lng": 103.8829, "lines": ["EWL"]},
+    {"code": "EW8/CC9", "name": "Paya Lebar MRT", "lat": 1.3182, "lng": 103.8931, "lines": ["EWL", "CCL"]},
+    {"code": "EW5", "name": "Bedok MRT", "lat": 1.3239, "lng": 103.9300, "lines": ["EWL"]},
+    {"code": "EW2/DT32", "name": "Tampines MRT", "lat": 1.3533, "lng": 103.9451, "lines": ["EWL", "DTL"]},
+    {"code": "CG2", "name": "Changi Airport MRT", "lat": 1.3575, "lng": 103.9878, "lines": ["EWL"]},
+    {"code": "NS9/TE2", "name": "Woodlands MRT", "lat": 1.4369, "lng": 103.7865, "lines": ["NSL", "TEL"]},
+    {"code": "NS13", "name": "Yishun MRT", "lat": 1.4295, "lng": 103.8350, "lines": ["NSL"]},
+    {"code": "NS16", "name": "Ang Mo Kio MRT", "lat": 1.3699, "lng": 103.8496, "lines": ["NSL"]},
+    {"code": "NS17/CC15", "name": "Bishan MRT", "lat": 1.3508, "lng": 103.8485, "lines": ["NSL", "CCL"]},
+    {"code": "NS21/DT11", "name": "Newton MRT", "lat": 1.3126, "lng": 103.8381, "lines": ["NSL", "DTL"]},
+    {"code": "NS22/TE14", "name": "Orchard MRT", "lat": 1.3040, "lng": 103.8318, "lines": ["NSL", "TEL"]},
+    {"code": "NS23", "name": "Somerset MRT", "lat": 1.3002, "lng": 103.8390, "lines": ["NSL"]},
+    {"code": "NS24/NE6/CC1", "name": "Dhoby Ghaut MRT", "lat": 1.2987, "lng": 103.8461, "lines": ["NSL", "NEL", "CCL"]},
+    {"code": "NS27/CE2/TE20", "name": "Marina Bay MRT", "lat": 1.2764, "lng": 103.8546, "lines": ["NSL", "CCL", "TEL"]},
+    {"code": "TE18", "name": "Maxwell MRT", "lat": 1.2805, "lng": 103.8439, "lines": ["TEL"]},
+    {"code": "TE19", "name": "Shenton Way MRT", "lat": 1.2777, "lng": 103.8503, "lines": ["TEL"]},
+    {"code": "DT17", "name": "Downtown MRT", "lat": 1.2795, "lng": 103.8528, "lines": ["DTL"]},
+    {"code": "DT18", "name": "Telok Ayer MRT", "lat": 1.2822, "lng": 103.8489, "lines": ["DTL"]},
+    {"code": "NE4/DT19", "name": "Chinatown MRT", "lat": 1.2845, "lng": 103.8435, "lines": ["NEL", "DTL"]},
+    {"code": "NE5", "name": "Clarke Quay MRT", "lat": 1.2886, "lng": 103.8466, "lines": ["NEL"]},
+    {"code": "NE1/CC29", "name": "HarbourFront MRT", "lat": 1.2653, "lng": 103.8215, "lines": ["NEL", "CCL"]},
+    {"code": "NE7/DT12", "name": "Little India MRT", "lat": 1.3068, "lng": 103.8496, "lines": ["NEL", "DTL"]},
+    {"code": "NE12/CC13", "name": "Serangoon MRT", "lat": 1.3505, "lng": 103.8728, "lines": ["NEL", "CCL"]},
+    {"code": "NE14/CR8", "name": "Hougang MRT", "lat": 1.3713, "lng": 103.8924, "lines": ["NEL"]},
+    {"code": "NE16/STC", "name": "Sengkang MRT", "lat": 1.3917, "lng": 103.8955, "lines": ["NEL", "STL"]},
+    {"code": "NE17/PTC", "name": "Punggol MRT", "lat": 1.4045, "lng": 103.9020, "lines": ["NEL", "PTL"]},
+    {"code": "CC4/DT15", "name": "Promenade MRT", "lat": 1.2932, "lng": 103.8604, "lines": ["CCL", "DTL"]},
+    {"code": "CC5", "name": "Nicoll Highway MRT", "lat": 1.2998, "lng": 103.8636, "lines": ["CCL"]},
+    {"code": "CC10/DT26", "name": "MacPherson MRT", "lat": 1.3261, "lng": 103.8892, "lines": ["CCL", "DTL"]},
+    {"code": "CC14", "name": "Lorong Chuan MRT", "lat": 1.3515, "lng": 103.8648, "lines": ["CCL"]},
+    {"code": "CC17/TE9", "name": "Caldecott MRT", "lat": 1.3377, "lng": 103.8396, "lines": ["CCL", "TEL"]},
+    {"code": "CC19/DT9", "name": "Botanic Gardens MRT", "lat": 1.3225, "lng": 103.8154, "lines": ["CCL", "DTL"]},
+    {"code": "DT1/BP6", "name": "Bukit Panjang MRT", "lat": 1.3790, "lng": 103.7615, "lines": ["DTL", "BPL"]},
+    {"code": "DT5", "name": "Beauty World MRT", "lat": 1.3416, "lng": 103.7758, "lines": ["DTL"]},
+    {"code": "DT6", "name": "King Albert Park MRT", "lat": 1.3357, "lng": 103.7832, "lines": ["DTL"]},
+    {"code": "DT10/TE11", "name": "Stevens MRT", "lat": 1.3201, "lng": 103.8260, "lines": ["DTL", "TEL"]},
+    {"code": "DT16/CE1", "name": "Bayfront MRT", "lat": 1.2819, "lng": 103.8591, "lines": ["DTL", "CCL"]},
+    {"code": "DT21", "name": "Bencoolen MRT", "lat": 1.2989, "lng": 103.8503, "lines": ["DTL"]},
+    {"code": "TE7", "name": "Bright Hill MRT", "lat": 1.3632, "lng": 103.8329, "lines": ["TEL"]},
+    {"code": "TE8", "name": "Upper Thomson MRT", "lat": 1.3544, "lng": 103.8329, "lines": ["TEL"]},
+    {"code": "TE13", "name": "Orchard Boulevard MRT", "lat": 1.3024, "lng": 103.8239, "lines": ["TEL"]},
+    {"code": "TE15", "name": "Great World MRT", "lat": 1.2934, "lng": 103.8334, "lines": ["TEL"]},
+    {"code": "TE16", "name": "Havelock MRT", "lat": 1.2885, "lng": 103.8336, "lines": ["TEL"]},
+]
+
+
 def add_server_log(event: str, details: Optional[Dict[str, Any]] = None) -> None:
     SERVER_LOGS.append({
         "time_utc": now_iso(),
@@ -391,6 +456,58 @@ def speed_segment_distance_m(segment: Dict[str, Any], lat: float, lng: float) ->
     d1 = distance_meters(lat, lng, segment["start_lat"], segment["start_lng"])
     d2 = distance_meters(lat, lng, segment["end_lat"], segment["end_lng"])
     return int(round(min(d1, d2)))
+
+
+
+
+def walking_minutes(distance_m: Optional[int]) -> Optional[int]:
+    if distance_m is None:
+        return None
+    # Approx. comfortable urban walking speed: 80 metres/minute (~4.8 km/h).
+    return max(1, int(math.ceil(float(distance_m) / 80.0)))
+
+
+def train_alert_matches_station(alert: Dict[str, Any], station: Dict[str, Any]) -> bool:
+    try:
+        status = int(alert.get("status") or 0)
+    except (TypeError, ValueError):
+        status = 0
+
+    if status < 2:
+        return False
+
+    station_codes = str(station.get("code") or "")
+    alert_stations = str(alert.get("stations") or "")
+    alert_line = str(alert.get("line") or "")
+    station_lines = station.get("lines") or []
+
+    if alert_stations and any(code.strip() and code.strip() in alert_stations for code in station_codes.replace("/", "|").split("|")):
+        return True
+
+    return bool(alert_line and alert_line in station_lines)
+
+
+def mobility_action_recommendation(taxi_600: int, taxi_1000: int, nearest_bus: Optional[Dict[str, Any]], nearest_mrt: Optional[Dict[str, Any]], nearest_stand: Optional[Dict[str, Any]], road_friction_count: int, major_train_alerts: int) -> str:
+    bus_walk = nearest_bus.get("walk_minutes") if nearest_bus else None
+    mrt_walk = nearest_mrt.get("walk_minutes") if nearest_mrt else None
+    stand_walk = nearest_stand.get("walk_minutes") if nearest_stand else None
+
+    if taxi_600 >= 4 and road_friction_count <= 2:
+        return "Wait/book taxi here. Available taxi supply is reasonable within 600m and current nearby road friction is limited."
+
+    if nearest_stand and stand_walk is not None and stand_walk <= 6 and taxi_1000 >= 2:
+        return f"Walk about {stand_walk} min to the nearest official taxi {nearest_stand.get('type') or 'stand'} if the app match is slow."
+
+    if nearest_bus and bus_walk is not None and bus_walk <= 5:
+        return f"Walk about {bus_walk} min to the nearest bus stop as the fastest fallback if taxi matching is slow."
+
+    if nearest_mrt and mrt_walk is not None and mrt_walk <= 12 and major_train_alerts == 0:
+        return f"Walk about {mrt_walk} min to the nearest MRT station as the strongest fallback."
+
+    if taxi_1000 >= 3:
+        return "Taxi supply exists within 1km, but not very close. Wait briefly or move toward the nearest official taxi stand."
+
+    return "No strong taxi supply is visible within 1km. Use the nearest bus stop or MRT fallback if timing matters."
 
 
 def readiness_level(taxis_300: int, taxis_600: int, taxis_1000: int, incidents_1500: int, slow_segments_1500: int) -> str:
@@ -774,6 +891,151 @@ def train_alerts():
     }
 
 
+
+@app.get("/mrt-stations")
+def mrt_stations():
+    return {
+        "source": "Static MRT/LRT station reference layer for walking guidance; train alert status uses live LTA TrainServiceAlerts",
+        "live_only": True,
+        "mock_data_used": False,
+        "count": len(MRT_STATIONS),
+        "updated_at_utc": now_iso(),
+        "data": MRT_STATIONS,
+    }
+
+
+@app.get("/mobility-decision")
+def mobility_decision(
+    lat: float = Query(..., ge=1.15, le=1.50),
+    lng: float = Query(..., ge=103.55, le=104.10),
+    radius_m: int = Query(default=1000, ge=300, le=2000),
+):
+    taxi_response = taxis()
+    bus_response = bus_stops(limit=6000)
+    stand_response = taxi_stands()
+    incident_response = traffic_incidents()
+    speed_response = traffic_speed_bands(limit=1500)
+    train_response = train_alerts()
+
+    taxis_by_distance = with_distance(taxi_response["data"], lat, lng)
+    buses_by_distance = with_distance(bus_response["data"], lat, lng)
+    stands_by_distance = with_distance(stand_response["data"], lat, lng)
+    mrt_by_distance = with_distance(MRT_STATIONS, lat, lng)
+    incidents_by_distance = with_distance(incident_response["data"], lat, lng)
+
+    slow_segments = []
+    for segment in speed_response["data"]:
+        if segment.get("speed_band") is not None and segment["speed_band"] <= 3:
+            clone = dict(segment)
+            clone["distance_m"] = speed_segment_distance_m(clone, lat, lng)
+            slow_segments.append(clone)
+    slow_segments.sort(key=lambda row: row["distance_m"])
+
+    taxis_300 = [row for row in taxis_by_distance if row["distance_m"] <= 300]
+    taxis_600 = [row for row in taxis_by_distance if row["distance_m"] <= 600]
+    taxis_radius = [row for row in taxis_by_distance if row["distance_m"] <= radius_m]
+    buses_radius = [row for row in buses_by_distance if row["distance_m"] <= radius_m]
+    stands_radius = [row for row in stands_by_distance if row["distance_m"] <= radius_m]
+    mrt_radius = [row for row in mrt_by_distance if row["distance_m"] <= radius_m]
+    incidents_1500 = [row for row in incidents_by_distance if row["distance_m"] <= 1500]
+    slow_segments_1500 = [row for row in slow_segments if row["distance_m"] <= 1500]
+
+    train_alerts_data = train_response["data"]
+    major_train_alerts = []
+    for alert in train_alerts_data:
+        try:
+            status = int(alert.get("status") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        if status >= 2:
+            major_train_alerts.append(alert)
+
+    for row in buses_radius:
+        row["walk_minutes"] = walking_minutes(row["distance_m"])
+    for row in stands_radius:
+        row["walk_minutes"] = walking_minutes(row["distance_m"])
+    for row in mrt_radius:
+        row["walk_minutes"] = walking_minutes(row["distance_m"])
+        row["has_relevant_train_alert"] = any(train_alert_matches_station(alert, row) for alert in train_alerts_data)
+
+    nearest_bus = buses_by_distance[0] if buses_by_distance else None
+    nearest_stand = stands_by_distance[0] if stands_by_distance else None
+    nearest_mrt = mrt_by_distance[0] if mrt_by_distance else None
+
+    if nearest_bus:
+        nearest_bus = dict(nearest_bus)
+        nearest_bus["walk_minutes"] = walking_minutes(nearest_bus["distance_m"])
+    if nearest_stand:
+        nearest_stand = dict(nearest_stand)
+        nearest_stand["walk_minutes"] = walking_minutes(nearest_stand["distance_m"])
+    if nearest_mrt:
+        nearest_mrt = dict(nearest_mrt)
+        nearest_mrt["walk_minutes"] = walking_minutes(nearest_mrt["distance_m"])
+        nearest_mrt["has_relevant_train_alert"] = any(train_alert_matches_station(alert, nearest_mrt) for alert in train_alerts_data)
+
+    road_friction_count = len(incidents_1500) + len(slow_segments_1500)
+    recommendation = mobility_action_recommendation(
+        taxi_600=len(taxis_600),
+        taxi_1000=len(taxis_radius),
+        nearest_bus=nearest_bus,
+        nearest_mrt=nearest_mrt,
+        nearest_stand=nearest_stand,
+        road_friction_count=road_friction_count,
+        major_train_alerts=len(major_train_alerts),
+    )
+
+    return {
+        "source": "Live LTA Taxi-Availability, BusStops, TaxiStands, TrafficIncidents, v4 TrafficSpeedBands and TrainServiceAlerts; MRT station coordinates are fixed reference points for walking guidance",
+        "live_only": True,
+        "mock_data_used": False,
+        "user_location": {"lat": lat, "lng": lng},
+        "radius_m": radius_m,
+        "walking_speed_assumption": "80 metres/minute, approximate walking time only",
+        "recommendation": recommendation,
+        "decision_options": {
+            "wait_for_taxi": {
+                "available_taxis_300m": len(taxis_300),
+                "available_taxis_600m": len(taxis_600),
+                "available_taxis_1000m": len(taxis_radius),
+                "status": "Strong" if len(taxis_600) >= 4 else "Moderate" if len(taxis_radius) >= 3 else "Weak",
+            },
+            "walk_to_bus_stop": {
+                "nearest": nearest_bus,
+                "count_within_1km": len(buses_radius),
+                "status": "Available" if nearest_bus and nearest_bus.get("distance_m", 999999) <= radius_m else "Not within 1km",
+            },
+            "walk_to_mrt": {
+                "nearest": nearest_mrt,
+                "count_within_1km": len(mrt_radius),
+                "major_train_alerts": len(major_train_alerts),
+                "status": "Available" if nearest_mrt and nearest_mrt.get("distance_m", 999999) <= radius_m else "Not within 1km",
+            },
+        },
+        "nearby": {
+            "available_taxis": taxis_radius[:80],
+            "bus_stops": buses_radius[:80],
+            "taxi_stands": stands_radius[:60],
+            "mrt_stations": mrt_radius[:20],
+            "traffic_incidents": incidents_1500[:30],
+            "slow_speed_segments": slow_segments_1500[:120],
+            "train_alerts": train_alerts_data,
+        },
+        "counts": {
+            "available_taxis_300m": len(taxis_300),
+            "available_taxis_600m": len(taxis_600),
+            "available_taxis_1000m": len(taxis_radius),
+            "bus_stops_1000m": len(buses_radius),
+            "taxi_stands_1000m": len(stands_radius),
+            "mrt_stations_1000m": len(mrt_radius),
+            "traffic_incidents_1500m": len(incidents_1500),
+            "slow_segments_1500m": len(slow_segments_1500),
+            "train_alerts": len(train_alerts_data),
+            "major_train_alerts": len(major_train_alerts),
+        },
+        "updated_at_utc": now_iso(),
+    }
+
+
 @app.get("/mobility")
 def mobility():
     taxi_response = taxis()
@@ -788,10 +1050,12 @@ def mobility():
         "taxis": taxi_response["data"],
         "bus_stops": bus_response["data"],
         "taxi_stands": stands_response["data"],
+        "mrt_stations": MRT_STATIONS,
         "counts": {
             "available_taxis": taxi_response["count"],
             "bus_stops_displayed": bus_response["count"],
             "taxi_stands": stands_response["count"],
+            "mrt_stations": len(MRT_STATIONS),
         },
     }
 

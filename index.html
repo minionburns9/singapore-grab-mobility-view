@@ -254,7 +254,7 @@
 
     @media (min-width: 820px) {
       .cards {
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(2, 1fr);
       }
 
       #home {
@@ -300,51 +300,37 @@
   <main id="home">
     <section class="hero">
       <h1>Singapore Grab Mobility View</h1>
-      <p>Mobile-first live mobility intelligence using LTA DataMall taxi, road, bus stop, taxi stand and train-alert APIs.</p>
+      <p>Mobile-first live mobility intelligence using LTA taxi availability, bus stops, taxi stands, traffic incidents, speed bands and train-alert APIs.</p>
       <div class="status-pill">Live LTA DataMall data · No mock or simulated mobility data</div>
     </section>
 
     <section class="cards">
       <button class="card" onclick="openView('heatmap')">
-        <div class="card-icon">⬡</div>
+        <div class="card-icon">⬢</div>
         <h2>Live Taxi Supply Hexmap</h2>
-        <p>See where available taxis are clustered in translucent hexagons across Singapore.</p>
+        <p>Citywide translucent hexagons showing available-for-hire taxi supply from LTA.</p>
         <span class="tag">Live taxi availability</span>
       </button>
 
       <button class="card" onclick="openView('forecast')">
-        <div class="card-icon">🎯</div>
+        <div class="card-icon">📍</div>
         <h2>Pickup Readiness</h2>
-        <p>Use your blue dot to decide whether to book here, walk to a taxi stand, or move toward stronger supply.</p>
-        <span class="tag">Local decision view</span>
+        <p>Use your blue-dot location to decide whether to book here or walk to a better pickup point.</p>
+        <span class="tag">Taxi decision view</span>
       </button>
 
       <button class="card" onclick="openView('nearby')">
-        <div class="card-icon">🚕</div>
-        <h2>Nearby Mobility</h2>
-        <p>Show available taxis, bus stops, taxi stands, and direction from your blue dot.</p>
-        <span class="tag">Supply visibility</span>
+        <div class="card-icon">🧭</div>
+        <h2>1km Mobility Choices</h2>
+        <p>One local view for taxis, bus stops, MRT, taxi stands, road friction and train alerts.</p>
+        <span class="tag">Wait, bus, or MRT</span>
       </button>
 
       <button class="card" onclick="openView('surge')">
         <div class="card-icon">🚦</div>
         <h2>Fare Pressure Proxy</h2>
-        <p>Use live taxi supply, road incidents and slow road segments to estimate ride friction without showing fake fares.</p>
-        <span class="tag">Live proxy · no fare claims</span>
-      </button>
-
-      <button class="card" onclick="openView('pickup')">
-        <div class="card-icon">📍</div>
-        <h2>Official Taxi Stands</h2>
-        <p>Find LTA taxi stands and stops, including barrier-free status where available.</p>
-        <span class="tag">Pickup infrastructure</span>
-      </button>
-
-      <button class="card" onclick="openView('disruption')">
-        <div class="card-icon">⚠️</div>
-        <h2>Traffic + Train Disruption</h2>
-        <p>Spot current road incidents and train service alerts.</p>
-        <span class="tag">Live disruption response</span>
+        <p>Uses live supply and traffic friction as a transparent proxy, not actual Grab pricing.</p>
+        <span class="tag">No fake surge data</span>
       </button>
     </section>
   </main>

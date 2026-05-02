@@ -27,9 +27,9 @@ const VIEW_META = {
     mode: "Pickup Readiness"
   },
   nearby: {
-    title: "Nearby Mobility",
-    subtitle: "Available taxis, official bus stops and official taxi stands.",
-    mode: "Nearby"
+    title: "1km Mobility Choices",
+    subtitle: "One local view to decide: wait for taxi, walk to bus stop, or walk to MRT.",
+    mode: "Mobility Choices"
   },
   surge: {
     title: "Fare Pressure Proxy",
@@ -114,6 +114,8 @@ function clearMapLayers() {
     "taxi-points",
     "taxi-direction-labels",
     "bus-points",
+    "mrt-points",
+    "mrt-labels",
     "taxi-stand-points",
     "taxi-stand-labels",
     "incident-points",
@@ -123,7 +125,9 @@ function clearMapLayers() {
     "readiness-ring-fills",
     "readiness-ring-lines",
     "readiness-ring-labels",
-    "readiness-guidance-line"
+    "readiness-guidance-line",
+    "guidance-lines",
+    "guidance-line-labels"
   ];
 
   const sources = [
@@ -131,11 +135,13 @@ function clearMapLayers() {
     "taxi-hex-source",
     "taxis-source",
     "bus-stops-source",
+    "mrt-stations-source",
     "taxi-stands-source",
     "incidents-source",
     "speed-source",
     "readiness-rings-source",
-    "readiness-line-source"
+    "readiness-line-source",
+    "guidance-lines-source"
   ];
 
   layers.forEach(layer => {
@@ -249,31 +255,105 @@ async function renderPickupReadiness() {
 }
 
 async function renderNearby() {
-  const mobility = await fetchJson("/mobility");
-  const taxis = mobility.taxis || [];
-  const busStops = mobility.bus_stops || [];
-  const taxiStands = mobility.taxi_stands || [];
+  if (!userLocation) {
+    const mobility = await fetchJson("/mobility");
+    addTaxiPoints((mobility.taxis || []).slice(0, 500), false);
+    addBusStopPoints((mobility.bus_stops || []).slice(0, 700));
+    addTaxiStandPoints(mobility.taxi_stands || []);
+    addMrtStationPoints(mobility.mrt_stations || []);
 
+    updateSheet(`
+      ${summaryCard("1km Mobility Choices", [
+        ["Status", "Tap My Location"],
+        ["Why location is needed", "to calculate 1km radius, walking time and fallback options"],
+        ["Available taxis shown", mobility.counts.available_taxis],
+        ["Bus stops displayed", mobility.counts.bus_stops_displayed],
+        ["Taxi stands/stops", mobility.counts.taxi_stands],
+        ["MRT reference stations", mobility.counts.mrt_stations]
+      ])}
+      ${listCard("3 user decisions this view will answer", [
+        "Wait/book taxi here based on available taxi supply within 300m / 600m / 1km.",
+        "Walk to bus stop with approximate walking time when taxi supply is weak.",
+        "Walk to MRT with approximate walking time, while checking live train disruption alerts."
+      ])}
+      ${noteCard("Tap ◎ My Location. The map will switch to a 1km local view with taxis, bus stops, taxi stands, MRT stations, road incidents, slow road segments and live train alerts.")}
+    `);
+    return;
+  }
+
+  const decision = await fetchJson(`/mobility-decision?lat=${userLocation.lat}&lng=${userLocation.lng}&radius_m=1000`);
+  const nearby = decision.nearby || {};
+  const taxis = nearby.available_taxis || [];
+  const busStops = nearby.bus_stops || [];
+  const taxiStands = nearby.taxi_stands || [];
+  const mrtStations = nearby.mrt_stations || [];
+  const incidents = nearby.traffic_incidents || [];
+  const slowSegments = nearby.slow_speed_segments || [];
+  const trainAlerts = nearby.train_alerts || [];
+
+  addReadinessRings(userLocation.lat, userLocation.lng);
   addTaxiPoints(taxis, true);
   addBusStopPoints(busStops);
-  addTaxiStandPoints(taxiStands);
+  addTaxiStandPoints(taxiStands, true);
+  addMrtStationPoints(mrtStations, true);
+  addIncidentPoints(incidents);
+  addSpeedLines(slowSegments, true);
+
+  const lines = [];
+  if (decision.decision_options.walk_to_bus_stop.nearest) {
+    lines.push({ to: decision.decision_options.walk_to_bus_stop.nearest, label: "Bus fallback" });
+  }
+  if (decision.decision_options.walk_to_mrt.nearest) {
+    lines.push({ to: decision.decision_options.walk_to_mrt.nearest, label: "MRT fallback" });
+  }
+  if (decision.decision_options.wait_for_taxi.available_taxis_600m < 4 && taxiStands.length) {
+    lines.push({ to: taxiStands[0], label: "Taxi stand" });
+  }
+  addGuidanceLines(userLocation, lines);
+
+  map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: Math.max(map.getZoom(), 14.2), speed: 0.7 });
+
+  const busNearest = decision.decision_options.walk_to_bus_stop.nearest;
+  const mrtNearest = decision.decision_options.walk_to_mrt.nearest;
+  const standNearest = decision.decision_options.wait_for_taxi.available_taxis_600m < 4 && taxiStands.length ? taxiStands[0] : null;
 
   updateSheet(`
-    ${summaryCard("Nearby Mobility", [
-      ["Available taxis", mobility.counts.available_taxis],
-      ["Bus stops displayed", mobility.counts.bus_stops_displayed],
-      ["Taxi stands/stops", mobility.counts.taxi_stands],
-      ["Taxi heading from LTA", "Not available"],
-      ["Direction shown", userLocation ? "bearing from your location to taxi" : "tap My Location to show bearing from you"],
-      ["Updated", formatTime(mobility.updated_at_utc)]
+    ${summaryCard("1km Mobility Choices", [
+      ["Recommendation", decision.recommendation],
+      ["Available taxis within 300m", decision.counts.available_taxis_300m],
+      ["Available taxis within 600m", decision.counts.available_taxis_600m],
+      ["Available taxis within 1km", decision.counts.available_taxis_1000m],
+      ["Bus stops within 1km", decision.counts.bus_stops_1000m],
+      ["MRT stations within 1km", decision.counts.mrt_stations_1000m],
+      ["Taxi stands within 1km", decision.counts.taxi_stands_1000m],
+      ["Road friction nearby", `${decision.counts.traffic_incidents_1500m} incidents · ${decision.counts.slow_segments_1500m} slow segments`],
+      ["Train alerts", `${decision.counts.train_alerts} records · ${decision.counts.major_train_alerts} major`]
+    ])}
+    ${summaryCard("Option 1: Wait / book taxi", [
+      ["Status", decision.decision_options.wait_for_taxi.status],
+      ["Available taxis in 600m", decision.decision_options.wait_for_taxi.available_taxis_600m],
+      ["Available taxis in 1km", decision.decision_options.wait_for_taxi.available_taxis_1000m]
+    ])}
+    ${summaryCard("Option 2: Walk to bus stop", [
+      ["Nearest bus stop", busNearest ? busNearest.name : "None within range"],
+      ["Distance", busNearest ? `${busNearest.distance_m}m` : "N/A"],
+      ["Approx walk", busNearest ? `${busNearest.walk_minutes} min` : "N/A"]
+    ])}
+    ${summaryCard("Option 3: Walk to MRT", [
+      ["Nearest MRT", mrtNearest ? mrtNearest.name : "None within range"],
+      ["Distance", mrtNearest ? `${mrtNearest.distance_m}m` : "N/A"],
+      ["Approx walk", mrtNearest ? `${mrtNearest.walk_minutes} min` : "N/A"],
+      ["Relevant train alert", mrtNearest && mrtNearest.has_relevant_train_alert ? "Yes" : "No"]
     ])}
     ${legendCard([
-      ["Green dots", "Available taxis"],
-      ["Small direction labels", "direction from your blue dot to the taxi, not taxi heading"],
-      ["Blue B", "Official bus stops"],
-      ["Yellow T", "Official taxi stands/stops"]
+      ["Blue dot/circles", "your location and 300m / 600m / 1km radius"],
+      ["Green dots", "available-for-hire taxis only"],
+      ["Blue B", "bus stops"],
+      ["Purple M", "MRT station reference point"],
+      ["Yellow T", "taxi stands/stops"],
+      ["Red", "road incident or slow segment"]
     ])}
-    ${noteCard("LTA Taxi-Availability gives taxi coordinates only. It does not provide vehicle heading, destination, driver route, or whether the taxi is moving. To avoid fake data, this view shows direction from your current location to the taxi after you tap My Location.")}
+    ${noteCard("Walking time is approximate using 80m/min and straight-line distance. Bus stop and taxi stand data come from LTA. MRT station points are fixed reference points; live train disruption status comes from LTA TrainServiceAlerts.")}
   `);
 }
 
@@ -703,6 +783,111 @@ function addTaxiStandPoints(stands, showLabels = false) {
     });
   }
 }
+
+
+function addMrtStationPoints(stations, showLabels = false) {
+  if (!stations || !stations.length) return;
+
+  map.addSource("mrt-stations-source", {
+    type: "geojson",
+    data: {
+      type: "FeatureCollection",
+      features: stations.map(station => pointFeature(station.lng, station.lat, {
+        type: "mrt",
+        label: station.name,
+        code: station.code,
+        has_alert: station.has_relevant_train_alert ? "yes" : "no"
+      }))
+    }
+  });
+
+  map.addLayer({
+    id: "mrt-points",
+    type: "symbol",
+    source: "mrt-stations-source",
+    layout: {
+      "text-field": "M",
+      "text-size": 12,
+      "text-allow-overlap": showLabels
+    },
+    paint: {
+      "text-color": "#ffffff",
+      "text-halo-color": ["case", ["==", ["get", "has_alert"], "yes"], "#ef4444", "#7c3aed"],
+      "text-halo-width": 2.5
+    }
+  });
+
+  if (showLabels) {
+    map.addLayer({
+      id: "mrt-labels",
+      type: "symbol",
+      source: "mrt-stations-source",
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 10,
+        "text-offset": [0, 1.6],
+        "text-allow-overlap": false
+      },
+      paint: {
+        "text-color": "#ffffff",
+        "text-halo-color": "#000000",
+        "text-halo-width": 1.2
+      }
+    });
+  }
+}
+
+function addGuidanceLines(from, lines) {
+  if (!from || !lines || !lines.length) return;
+
+  const features = lines
+    .filter(line => line.to && line.to.lat !== undefined && line.to.lng !== undefined)
+    .map(line => ({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: [[from.lng, from.lat], [line.to.lng, line.to.lat]]
+      },
+      properties: { label: line.label || "Option" }
+    }));
+
+  if (!features.length) return;
+
+  map.addSource("guidance-lines-source", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features }
+  });
+
+  map.addLayer({
+    id: "guidance-lines",
+    type: "line",
+    source: "guidance-lines-source",
+    paint: {
+      "line-color": "#facc15",
+      "line-width": 2.4,
+      "line-opacity": 0.78,
+      "line-dasharray": [1.4, 1.2]
+    }
+  });
+
+  map.addLayer({
+    id: "guidance-line-labels",
+    type: "symbol",
+    source: "guidance-lines-source",
+    layout: {
+      "symbol-placement": "line-center",
+      "text-field": ["get", "label"],
+      "text-size": 10,
+      "text-allow-overlap": false
+    },
+    paint: {
+      "text-color": "#111827",
+      "text-halo-color": "#facc15",
+      "text-halo-width": 1.8
+    }
+  });
+}
+
 
 function addIncidentPoints(incidents) {
   map.addSource("incidents-source", {
