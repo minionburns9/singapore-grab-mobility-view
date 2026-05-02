@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import time
+import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -360,6 +361,59 @@ def cluster_taxis(taxis: List[Dict[str, Any]], grid_size: float = 0.015) -> List
 
     return clusters
 
+# --- Pickup Readiness helpers ---
+def distance_meters(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    radius = 6371000
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lam = math.radians(lng2 - lng1)
+    a = math.sin(delta_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lam / 2) ** 2
+    return radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def with_distance(items: List[Dict[str, Any]], lat: float, lng: float) -> List[Dict[str, Any]]:
+    enriched = []
+    for item in items:
+        item_lat = item.get("lat")
+        item_lng = item.get("lng")
+        if item_lat is None or item_lng is None:
+            continue
+        clone = dict(item)
+        clone["distance_m"] = int(round(distance_meters(lat, lng, float(item_lat), float(item_lng))))
+        enriched.append(clone)
+    enriched.sort(key=lambda row: row["distance_m"])
+    return enriched
+
+
+def speed_segment_distance_m(segment: Dict[str, Any], lat: float, lng: float) -> int:
+    # Lightweight proxy: nearest endpoint distance. Good enough for current map guidance without heavy geometry libs.
+    d1 = distance_meters(lat, lng, segment["start_lat"], segment["start_lng"])
+    d2 = distance_meters(lat, lng, segment["end_lat"], segment["end_lng"])
+    return int(round(min(d1, d2)))
+
+
+def readiness_level(taxis_300: int, taxis_600: int, taxis_1000: int, incidents_1500: int, slow_segments_1500: int) -> str:
+    if taxis_300 >= 3 and incidents_1500 == 0:
+        return "High"
+    if taxis_600 >= 4 or taxis_1000 >= 10:
+        return "Medium"
+    if taxis_1000 >= 3:
+        return "Low-Medium"
+    return "Low"
+
+
+def readiness_recommendation(level: str, taxis_300: int, taxis_600: int, nearest_stand: Optional[Dict[str, Any]], nearest_cluster: Optional[Dict[str, Any]]) -> str:
+    if level == "High":
+        return "Book here. Available taxi supply is close enough around your current location."
+    if taxis_600 >= 4:
+        return "Book here or walk a short distance toward the nearest supply cluster if matching is slow."
+    if nearest_stand and nearest_stand.get("distance_m", 999999) <= 700:
+        return f"Walk to the nearest official taxi {nearest_stand.get('type') or 'stand'} around {nearest_stand['distance_m']}m away."
+    if nearest_cluster:
+        return f"Supply is thin at your exact location. Move toward {nearest_cluster.get('name', 'the nearest supply cluster')} around {nearest_cluster['distance_m']}m away."
+    return "Taxi supply looks thin nearby. Consider MRT/bus fallback or wait before booking."
+
 
 @app.get("/")
 def serve_index():
@@ -542,6 +596,83 @@ def supply_summary():
         "available_taxis": taxi_count,
         "visible_clusters": len(clusters),
         "top_clusters": clusters[:5],
+        "updated_at_utc": now_iso(),
+    }
+
+
+@app.get("/pickup-readiness")
+def pickup_readiness(
+    lat: float = Query(..., ge=1.15, le=1.50),
+    lng: float = Query(..., ge=103.55, le=104.10),
+):
+    """
+    User-location-first readiness view.
+
+    Important: LTA Taxi-Availability only exposes available-for-hire taxis.
+    It does not expose hired, busy, booked, Grab-only, driver destination, or taxi heading data.
+    This endpoint therefore makes a transparent decision recommendation from available supply,
+    official taxi stands, road incidents, and slow road segments only.
+    """
+    taxi_response = taxis()
+    taxi_rows = taxi_response["data"]
+    clusters = zones(limit=80)["data"]
+    stands = taxi_stands()["data"]
+    incidents = traffic_incidents()["data"]
+    speed_response = traffic_speed_bands(limit=1500)
+
+    taxis_by_distance = with_distance(taxi_rows, lat, lng)
+    stands_by_distance = with_distance(stands, lat, lng)
+    incidents_by_distance = with_distance(incidents, lat, lng)
+    clusters_by_distance = with_distance(clusters, lat, lng)
+
+    slow_segments = []
+    for segment in speed_response["data"]:
+        if segment.get("speed_band") is not None and segment["speed_band"] <= 3:
+            clone = dict(segment)
+            clone["distance_m"] = speed_segment_distance_m(clone, lat, lng)
+            slow_segments.append(clone)
+    slow_segments.sort(key=lambda row: row["distance_m"])
+
+    taxis_300 = [row for row in taxis_by_distance if row["distance_m"] <= 300]
+    taxis_600 = [row for row in taxis_by_distance if row["distance_m"] <= 600]
+    taxis_1000 = [row for row in taxis_by_distance if row["distance_m"] <= 1000]
+    stands_1000 = [row for row in stands_by_distance if row["distance_m"] <= 1000]
+    incidents_1500 = [row for row in incidents_by_distance if row["distance_m"] <= 1500]
+    slow_segments_1500 = [row for row in slow_segments if row["distance_m"] <= 1500]
+
+    nearest_stand = stands_by_distance[0] if stands_by_distance else None
+    nearest_cluster = clusters_by_distance[0] if clusters_by_distance else None
+    level = readiness_level(len(taxis_300), len(taxis_600), len(taxis_1000), len(incidents_1500), len(slow_segments_1500))
+    recommendation = readiness_recommendation(level, len(taxis_300), len(taxis_600), nearest_stand, nearest_cluster)
+
+    return {
+        "source": "Derived only from live LTA Taxi-Availability, TaxiStands, TrafficIncidents and v4 TrafficSpeedBands",
+        "live_only": True,
+        "mock_data_used": False,
+        "user_location": {"lat": lat, "lng": lng},
+        "readiness_level": level,
+        "recommendation": recommendation,
+        "available_taxi_counts": {
+            "within_300m": len(taxis_300),
+            "within_600m": len(taxis_600),
+            "within_1000m": len(taxis_1000),
+            "total_available_from_lta": taxi_response["count"],
+        },
+        "unavailable_taxis": {
+            "available_from_lta": False,
+            "message": "LTA Taxi-Availability excludes hired/busy taxis. Hired, busy, booked and platform-specific Grab vehicle statuses are not available in this public feed."
+        },
+        "nearest_taxis": taxis_by_distance[:60],
+        "nearby_taxi_stands": stands_1000[:40],
+        "nearest_taxi_stand": nearest_stand,
+        "nearest_supply_cluster": nearest_cluster,
+        "nearby_traffic_incidents": incidents_1500[:20],
+        "nearby_slow_speed_segments": slow_segments_1500[:80],
+        "counts": {
+            "nearby_taxi_stands_1000m": len(stands_1000),
+            "traffic_incidents_1500m": len(incidents_1500),
+            "slow_segments_1500m": len(slow_segments_1500),
+        },
         "updated_at_utc": now_iso(),
     }
 
