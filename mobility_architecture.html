@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Singapore Taxi & Mobility Decision View - System Architecture</title>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "neutral",
+      securityLevel: "loose",
+      flowchart: {
+        curve: "linear",
+        useMaxWidth: true,
+        htmlLabels: true
+      }
+    });
+  </script>
+
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #5b6472;
+      --border: #d8dde6;
+      --blue: #2563eb;
+      --green: #2e8b57;
+      --orange: #f97316;
+      --purple: #7c3aed;
+      --red: #dc2626;
+      --teal: #0f766e;
+      --shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .page {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.15;
+    }
+
+    .subtitle {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+
+    .legend-title,
+    .section-title {
+      margin: 0 0 14px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .legend-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(180px, 1fr));
+      gap: 14px;
+    }
+
+    .legend-item {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .tag {
+      min-width: 42px;
+      text-align: center;
+      font-weight: 700;
+      font-size: 12px;
+      line-height: 1;
+      padding: 4px 6px;
+      border-radius: 6px;
+      border: 1px solid currentColor;
+      margin-top: 2px;
+      background: #fff;
+    }
+
+    .tag-blue { color: var(--blue); }
+    .tag-green { color: var(--green); }
+    .tag-orange { color: var(--orange); }
+    .tag-purple { color: var(--purple); }
+    .tag-red { color: var(--red); }
+
+    .legend-item strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+
+    .legend-item span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .diagram-wrap {
+      overflow-x: auto;
+    }
+
+    .mermaid {
+      min-width: 1100px;
+    }
+
+    .details-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(320px, 1fr));
+      gap: 18px;
+    }
+
+    .detail-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+
+    .detail-card h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .detail-card ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .detail-card li {
+      margin-bottom: 8px;
+    }
+
+    .footnote {
+      margin-top: 16px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    @media (max-width: 1100px) {
+      .legend-grid {
+        grid-template-columns: repeat(2, minmax(220px, 1fr));
+      }
+
+      .details-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        padding: 14px;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+
+      .legend-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Singapore Taxi & Mobility Decision View</h1>
+    <p class="subtitle">
+      Simple system architecture for the live taxi mobility app built on LTA DataMall, Render/FastAPI, and Mapbox.
+      The diagram shows the main systems and data flow. Detailed inputs, outputs, assumptions, and system considerations
+      are listed below the diagram.
+    </p>
+
+    <section class="panel">
+      <h2 class="legend-title">Security / Data Handling Legend</h2>
+      <div class="legend-grid">
+        <div class="legend-item">
+          <div class="tag tag-blue">[E-T]</div>
+          <div>
+            <strong>Encryption in Transit</strong>
+            <span>HTTPS / TLS protects Browser ↔ Render, Browser ↔ Mapbox, and Render ↔ LTA DataMall traffic.</span>
+          </div>
+        </div>
+
+        <div class="legend-item">
+          <div class="tag tag-green">[E-R]</div>
+          <div>
+            <strong>Secrets at Rest</strong>
+            <span>LTA AccountKey and Mapbox token are stored as server-side environment variables in Render, not in GitHub source code.</span>
+          </div>
+        </div>
+
+        <div class="legend-item">
+          <div class="tag tag-orange">[A]</div>
+          <div>
+            <strong>Access Control</strong>
+            <span>LTA <code>AccountKey</code> is used only on the backend. The browser never calls LTA directly.</span>
+          </div>
+        </div>
+
+        <div class="legend-item">
+          <div class="tag tag-purple">[P]</div>
+          <div>
+            <strong>Privacy / Data Minimization</strong>
+            <span>User location is used only after browser permission. It is sent to the backend only to calculate local readiness and 1km mobility choices.</span>
+          </div>
+        </div>
+
+        <div class="legend-item">
+          <div class="tag tag-red">[D]</div>
+          <div>
+            <strong>Derived Analytics</strong>
+            <span>Fare Pressure Proxy is derived from public signals such as taxi availability, traffic incidents, slow segments, and nearby alternatives. It is not actual Grab pricing.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="section-title">System Architecture Diagram</h2>
+      <div class="diagram-wrap">
+        <div class="mermaid">
+flowchart LR
+    U[User / Rider]
+
+    subgraph C[Client Layer - Browser]
+      B1[Web UI<br/>index.html]
+      B2[Frontend Logic<br/>app.js]
+      B3[Map Rendering<br/>Mapbox GL JS]
+      B4[Browser Geolocation API<br/>optional]
+    end
+
+    subgraph R[Application Layer - Render Web Service]
+      S1[Static File Serving<br/>index.html / app.js / CSS]
+      S2[FastAPI Backend<br/>server.py]
+      S3[Decision / Analytics Logic<br/>• citywide taxi supply hexmap<br/>• pickup readiness<br/>• 1km mobility choices<br/>• walking-time estimation<br/>• fare pressure proxy<br/>• disruption overlays]
+      S4[Environment Secrets [E-R]<br/>• MAPBOX_TOKEN<br/>• LTA_ACCOUNT_KEY]
+    end
+
+    subgraph X[External Services]
+      M[Mapbox<br/>styles / tiles / map assets]
+      L[LTA DataMall Dynamic APIs<br/>• Taxi-Availability<br/>• BusStops<br/>• TaxiStands<br/>• TrafficIncidents<br/>• TrafficSpeedBands<br/>• TrainServiceAlerts]
+    end
+
+    U -->|tap views / enable location| B1
+    B1 --> B2
+    B2 --> B3
+    B2 --> B4
+
+    B2 -->|GET /, /app.js, /config [E-T]| S1
+    B2 -->|GET API endpoints [E-T]<br/>/taxis, /zones, /supply-summary,<br/>/pickup-readiness?lat&lng,<br/>/mobility-decision?lat&lng&radius_m,<br/>/bus-stops, /taxi-stands,<br/>/traffic-incidents, /traffic-speed-bands,<br/>/train-alerts, /mobility, /disruptions| S2
+
+    S1 --> S2
+    S2 --> S3
+    S2 --> S4
+
+    B3 -->|Map styles / tiles [E-T]<br/>Mapbox public token| M
+    S2 -->|LTA requests [E-T] [A]<br/>AccountKey header sent server-side only| L
+    L -->|live JSON datasets| S2
+
+    S3 -->|derived outputs<br/>hex counts, nearby choices,<br/>walking time, readiness score,<br/>fare pressure proxy| S2
+    S2 -->|JSON responses [E-T]| B2
+    B2 -->|hexmap / rings / markers / flows / cards| U
+        </div>
+      </div>
+    </section>
+
+    <section class="details-grid">
+      <div class="detail-card">
+        <h3>Inputs</h3>
+        <ul>
+          <li><strong>User interaction:</strong> view selection, “My Location” tap, map interaction, and refreshes.</li>
+          <li><strong>User location (optional):</strong> browser geolocation coordinates, only after permission is granted.</li>
+          <li><strong>LTA live datasets:</strong> Taxi Availability, Bus Stops, Taxi Stands, Traffic Incidents, Traffic Speed Bands, and Train Service Alerts.</li>
+          <li><strong>Mapbox assets:</strong> basemap styles and tiles for rendering the interactive map.</li>
+          <li><strong>Server-side configuration:</strong> <code>MAPBOX_TOKEN</code> and <code>LTA_ACCOUNT_KEY</code> stored in Render environment variables.</li>
+        </ul>
+      </div>
+
+      <div class="detail-card">
+        <h3>Outputs</h3>
+        <ul>
+          <li><strong>Live Taxi Supply Hexmap:</strong> citywide view of available-for-hire taxis grouped into translucent hex cells.</li>
+          <li><strong>Pickup Readiness:</strong> local taxi-only decision support within 300m / 600m / 1km, including nearby supply and pickup context.</li>
+          <li><strong>1km Mobility Choices:</strong> top 3 recommended local options such as taxi / taxi stand / bus stop / MRT, with approximate walking time.</li>
+          <li><strong>Fare Pressure Proxy:</strong> derived indicator of pickup difficulty based on public signals only.</li>
+          <li><strong>Disruption overlays:</strong> traffic incidents, slow road segments, bus stops, taxi stands, and train alerts.</li>
+          <li><strong>Operational / debug endpoints:</strong> health checks, config, and API responses for validation.</li>
+        </ul>
+      </div>
+
+      <div class="detail-card">
+        <h3>System Considerations</h3>
+        <ul>
+          <li><strong>No direct LTA calls from browser:</strong> the client always calls the FastAPI backend; LTA credentials remain server-side.</li>
+          <li><strong>Encryption:</strong> all external traffic should use HTTPS/TLS. This protects user-to-app, app-to-LTA, and app-to-Mapbox communication.</li>
+          <li><strong>Secrets handling:</strong> LTA AccountKey must never be committed to GitHub or exposed in browser JavaScript.</li>
+          <li><strong>Token exposure model:</strong> Mapbox uses a public browser token; this is acceptable, but it should ideally be URL-restricted.</li>
+          <li><strong>No durable application database:</strong> the current app is designed as a live, read-mostly view with on-the-fly calculations.</li>
+          <li><strong>Rate / reliability:</strong> LTA and Mapbox external dependencies may affect app responsiveness. Simple caching and retry handling would be a good future improvement.</li>
+          <li><strong>Privacy:</strong> the app should avoid storing precise user location persistently unless a later product requirement explicitly needs it.</li>
+        </ul>
+      </div>
+
+      <div class="detail-card">
+        <h3>Assumptions</h3>
+        <ul>
+          <li><strong>LTA Taxi Availability scope:</strong> the feed is treated as live <em>available-for-hire taxis</em> in Singapore. It does <strong>not</strong> include hired/busy taxis.</li>
+          <li><strong>No private-hire / platform detail:</strong> the app does not know whether a taxi is on Grab, Zig, Gojek, TADA, or street-hail only.</li>
+          <li><strong>No actual Grab pricing:</strong> the app does not receive real Grab fare or surge APIs, so “Fare Pressure Proxy” is only a public-data estimate.</li>
+          <li><strong>Mobility choices are local, not full routing:</strong> the current app does not use destination input, so recommendations are based on local proximity and system conditions, not full trip optimisation.</li>
+          <li><strong>Walking time is approximate:</strong> calculated from simple distance assumptions rather than full pedestrian network routing.</li>
+          <li><strong>MRT station layer:</strong> MRT station points are reference locations; live disruption status comes from LTA Train Service Alerts.</li>
+        </ul>
+      </div>
+    </section>
+
+    <div class="footnote">
+      <strong>Recommended label for the product:</strong>
+      <br />
+      <em>Singapore Taxi & Mobility Decision View</em>
+      <br /><br />
+      This naming is more accurate than “Grab Mobility View” because the app is built from public LTA DataMall transport signals rather than operator-specific Grab APIs.
+    </div>
+  </div>
+</body>
+</html>
