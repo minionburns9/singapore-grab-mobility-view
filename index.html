@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Singapore Grab Mobility View</title>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css" rel="stylesheet" />
+
+  <style>
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      width: 100%;
+      font-family: Arial, sans-serif;
+      background: #07111f;
+      color: #ffffff;
+    }
+
+    body {
+      overflow-x: hidden;
+    }
+
+    #home {
+      min-height: 100vh;
+      padding: 18px;
+      background:
+        radial-gradient(circle at top right, rgba(0, 214, 143, 0.24), transparent 32%),
+        linear-gradient(180deg, #07111f 0%, #0a1626 100%);
+    }
+
+    .hero {
+      margin-bottom: 18px;
+    }
+
+    .hero h1 {
+      font-size: 26px;
+      margin: 0 0 8px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: #b7c8da;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .status-pill {
+      display: inline-block;
+      margin-top: 12px;
+      background: rgba(0, 214, 143, 0.15);
+      border: 1px solid rgba(0, 214, 143, 0.35);
+      color: #7fffd4;
+      padding: 7px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      padding-bottom: 24px;
+    }
+
+    .card {
+      border: none;
+      color: white;
+      text-align: left;
+      background: rgba(19, 38, 60, 0.96);
+      border-radius: 18px;
+      padding: 18px;
+      min-height: 132px;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.28);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .card:active {
+      transform: scale(0.99);
+    }
+
+    .card-icon {
+      font-size: 26px;
+      margin-bottom: 12px;
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .card p {
+      margin: 0;
+      color: #c5d5e5;
+      line-height: 1.4;
+      font-size: 13px;
+    }
+
+    .tag {
+      display: inline-block;
+      margin-top: 12px;
+      font-size: 11px;
+      color: #79d7ff;
+      background: rgba(121, 215, 255, 0.12);
+      padding: 5px 8px;
+      border-radius: 999px;
+    }
+
+    #mapView {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #07111f;
+    }
+
+    #map {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #topBar {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 30;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+    }
+
+    .topButton, .topPill {
+      pointer-events: auto;
+      border: none;
+      color: white;
+      background: rgba(10, 22, 38, 0.94);
+      padding: 10px 13px;
+      border-radius: 999px;
+      font-size: 13px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+
+    #bottomSheet {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 39vh;
+      min-height: 120px;
+      max-height: 470px;
+      background: rgba(10, 22, 38, 0.97);
+      border-radius: 22px 22px 0 0;
+      z-index: 25;
+      box-shadow: 0 -8px 30px rgba(0,0,0,0.45);
+      transform: translateY(calc(100% - 112px));
+      transition: transform 0.25s ease;
+      overflow: hidden;
+      border-top: 1px solid rgba(255,255,255,0.12);
+    }
+
+    #bottomSheet.expanded {
+      transform: translateY(0);
+    }
+
+    #sheetHeader {
+      padding: 10px 16px 8px;
+      cursor: pointer;
+    }
+
+    #dragHandle {
+      width: 46px;
+      height: 5px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.35);
+      margin: 0 auto 10px;
+    }
+
+    #sheetTitle {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #viewTitle {
+      margin: 0;
+      font-size: 17px;
+    }
+
+    #viewSubtitle {
+      color: #9fb3c8;
+      font-size: 12px;
+      margin-top: 4px;
+      line-height: 1.35;
+    }
+
+    #sheetToggleText {
+      color: #79d7ff;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    #sheetContent {
+      padding: 0 14px 18px;
+      overflow-y: auto;
+      height: calc(100% - 76px);
+    }
+
+    .info-card {
+      background: #13263c;
+      padding: 12px;
+      border-radius: 12px;
+      margin-bottom: 12px;
+    }
+
+    .info-card h3 {
+      margin: 0 0 8px;
+      color: #9ed8ff;
+      font-size: 14px;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      font-size: 13px;
+    }
+
+    .metric:last-child {
+      border-bottom: none;
+    }
+
+    .metric strong {
+      color: #79d7ff;
+      text-align: right;
+    }
+
+    .mapboxgl-popup-content {
+      color: #111;
+      font-size: 13px;
+    }
+
+    @media (min-width: 820px) {
+      .cards {
+        grid-template-columns: repeat(3, 1fr);
+      }
+
+      #home {
+        padding: 32px;
+      }
+
+      .hero h1 {
+        font-size: 34px;
+      }
+
+      #bottomSheet {
+        left: 16px;
+        right: auto;
+        top: 16px;
+        bottom: 16px;
+        width: 360px;
+        height: auto;
+        max-height: none;
+        border-radius: 16px;
+        transform: none;
+      }
+
+      #bottomSheet.expanded {
+        transform: none;
+      }
+
+      #dragHandle, #sheetToggleText {
+        display: none;
+      }
+
+      #sheetHeader {
+        cursor: default;
+      }
+
+      #sheetContent {
+        height: calc(100vh - 110px);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main id="home">
+    <section class="hero">
+      <h1>Singapore Grab Mobility View</h1>
+      <p>Mobile-first map views for taxi demand, nearby mobility, pickup reliability and surge-risk intelligence.</p>
+      <div class="status-pill">Prototype using simulated demand + live-ready map architecture</div>
+    </section>
+
+    <section class="cards">
+      <button class="card" onclick="openView('heatmap')">
+        <div class="card-icon">🔥</div>
+        <h2>Demand Heatmap</h2>
+        <p>See high-demand pickup zones across Singapore.</p>
+        <span class="tag">Demand intelligence</span>
+      </button>
+
+      <button class="card" onclick="openView('forecast')">
+        <div class="card-icon">📈</div>
+        <h2>Taxi Demand Forecast</h2>
+        <p>View demand and waiting-time risk by time window.</p>
+        <span class="tag">Time-based planning</span>
+      </button>
+
+      <button class="card" onclick="openView('nearby')">
+        <div class="card-icon">🚕</div>
+        <h2>Nearby Mobility</h2>
+        <p>Show taxis, MRT stations and bus stops nearby.</p>
+        <span class="tag">Supply visibility</span>
+      </button>
+
+      <button class="card" onclick="openView('surge')">
+        <div class="card-icon">💸</div>
+        <h2>Fare Shock / Surge Risk</h2>
+        <p>Identify areas where pricing may be elevated.</p>
+        <span class="tag">Price predictability</span>
+      </button>
+
+      <button class="card" onclick="openView('pickup')">
+        <div class="card-icon">📍</div>
+        <h2>Pickup Reliability</h2>
+        <p>Find hard pickup zones and safer pickup alternatives.</p>
+        <span class="tag">Cancellation reduction</span>
+      </button>
+
+      <button class="card" onclick="openView('disruption')">
+        <div class="card-icon">🌧️</div>
+        <h2>Event & Weather Disruption</h2>
+        <p>Spot airport, rain, event and late-night demand pressure.</p>
+        <span class="tag">Disruption response</span>
+      </button>
+    </section>
+  </main>
+
+  <section id="mapView">
+    <div id="map"></div>
+
+    <div id="topBar">
+      <button class="topButton" onclick="goHome()">← Home</button>
+      <div class="topPill" id="topMode">Map View</div>
+    </div>
+
+    <div id="bottomSheet">
+      <div id="sheetHeader" onclick="toggleSheet()">
+        <div id="dragHandle"></div>
+        <div id="sheetTitle">
+          <div>
+            <h2 id="viewTitle">Map View</h2>
+            <div id="viewSubtitle">Loading data...</div>
+          </div>
+          <div id="sheetToggleText">Expand</div>
+        </div>
+      </div>
+
+      <div id="sheetContent"></div>
+    </div>
+  </section>
+
+  <script>
+    function toggleSheet() {
+      const sheet = document.getElementById("bottomSheet");
+      const text = document.getElementById("sheetToggleText");
+      sheet.classList.toggle("expanded");
+      text.innerText = sheet.classList.contains("expanded") ? "Collapse" : "Expand";
+    }
+  </script>
+
+  <script src="/app.js?v=1"></script>
+</body>
+</html>
